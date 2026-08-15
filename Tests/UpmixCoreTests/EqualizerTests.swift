@@ -49,13 +49,48 @@ final class EqualizerTests: XCTestCase {
     }
 
     func testAutoPreampCompensatesMaxBoost() {
-        // preampDb nil = automatic headroom: -(max positive band gain).
+        // preampDb nil = automatic headroom for the measured cascade peak.
         let eq = Equalizer(
             bands: [EqBand(freqHz: 1000, gainDb: 6), EqBand(freqHz: 8000, gainDb: 2)],
             sampleRate: sampleRate)!
-        XCTAssertEqual(eq.effectivePreampDb, -6, accuracy: 1e-5)
+        XCTAssertLessThanOrEqual(eq.effectivePreampDb, -6)
+        XCTAssertGreaterThan(eq.effectivePreampDb, -7, "preamp should be near the peak, not stacked")
         let g = gain(of: eq, at: 1000)
-        XCTAssertEqual(g, 1.0, accuracy: 0.06, "boost + auto preamp should net out at center")
+        XCTAssertLessThanOrEqual(g, 1.005, "boosted center must not exceed unity after preamp")
+        XCTAssertGreaterThan(g, 0.88, "preamp should not be grossly over-conservative")
+    }
+
+    func testAutoPreampCoversOverlappingBoosts() {
+        // Two overlapping +6 dB bands cascade to ~+11 dB between them; the
+        // auto preamp must cover the measured combined peak, not just the
+        // single largest band.
+        let eq = Equalizer(
+            bands: [EqBand(freqHz: 1000, gainDb: 6), EqBand(freqHz: 1200, gainDb: 6)],
+            sampleRate: sampleRate)!
+        for freq in [1000.0, 1094.0, 1200.0] {
+            let g = gain(of: eq, at: freq)
+            XCTAssertLessThanOrEqual(
+                g, 1.005, "full-scale \(freq) Hz must not clip (measured \(g))")
+        }
+    }
+
+    func testOutputStaysFiniteForHugeFiniteInput() {
+        // A finite-but-enormous sample overflows Float inside a boosted
+        // biquad; the output must still be sanitized.
+        let eq = Equalizer(
+            bands: [EqBand(freqHz: 1000, gainDb: 24)], sampleRate: sampleRate, preampDb: 0)!
+        let n = 512
+        var left: [Float] = (0..<n).map { _ in 0.1 }
+        left[10] = 3e38
+        var right = left
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in
+                eq.process(left: l.baseAddress!, right: r.baseAddress!, frames: n)
+            }
+        }
+        XCTAssertTrue(left.allSatisfy(\.isFinite), "overflow inside the filter must not escape")
+        let g = gain(of: eq, at: 1000)
+        XCTAssertGreaterThan(g, 1.0, "state should recover in the next buffer")
     }
 
     func testAutoPreampIsZeroWithoutBoosts() {
@@ -130,6 +165,11 @@ final class EqualizerTests: XCTestCase {
 
     func testRejectsInvalidBands() {
         XCTAssertNil(EqBand(freqHz: 0, gainDb: 3).validated(sampleRate: sampleRate))
+        XCTAssertNil(EqBand(freqHz: 5, gainDb: 3).validated(sampleRate: sampleRate),
+                     "sub-10Hz should be rejected for pole-stability margin")
+        XCTAssertNil(EqBand(freqHz: 22_000, gainDb: 3).validated(sampleRate: sampleRate),
+                     "frequencies above 0.45*sr should be rejected for stability margin")
+        XCTAssertNotNil(EqBand(freqHz: 21_000, gainDb: 3).validated(sampleRate: sampleRate))
         XCTAssertNil(EqBand(freqHz: 30_000, gainDb: 3).validated(sampleRate: sampleRate))
         XCTAssertNil(EqBand(freqHz: 1000, gainDb: 30).validated(sampleRate: sampleRate))
         XCTAssertNil(EqBand(freqHz: 1000, gainDb: .nan).validated(sampleRate: sampleRate))

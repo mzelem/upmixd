@@ -14,15 +14,35 @@ public struct EqBand: Equatable {
     }
 
     /// Returns self if the band is usable at the given sample rate; nil
-    /// otherwise. Never traps.
+    /// otherwise. Never traps. The frequency bounds ([10 Hz, 0.45*sr]) keep
+    /// the pole pair off the unit circle with margin at both DC and Nyquist.
     public func validated(sampleRate: Double) -> EqBand? {
         guard sampleRate.isFinite, sampleRate > 0,
-              freqHz.isFinite, freqHz > 0, freqHz < sampleRate / 2,
+              freqHz.isFinite, freqHz >= 10, freqHz <= 0.45 * sampleRate,
               gainDb.isFinite, abs(gainDb) <= 24,
               q.isFinite, q >= 0.1, q <= 18
         else { return nil }
         return self
     }
+}
+
+/// RBJ peaking coefficients in Double precision, shared by the filter and
+/// the cascade-response measurement.
+func peakingCoefficients(
+    _ band: EqBand, sampleRate: Double
+) -> (b0: Double, b1: Double, b2: Double, a1: Double, a2: Double) {
+    let amp = pow(10.0, Double(band.gainDb) / 40.0)
+    let omega = 2.0 * Double.pi * band.freqHz / sampleRate
+    let cosw = cos(omega)
+    let alpha = sin(omega) / (2.0 * band.q)
+    let a0 = 1.0 + alpha / amp
+    return (
+        b0: (1.0 + alpha * amp) / a0,
+        b1: (-2.0 * cosw) / a0,
+        b2: (1.0 - alpha * amp) / a0,
+        a1: (-2.0 * cosw) / a0,
+        a2: (1.0 - alpha / amp) / a0
+    )
 }
 
 /// RBJ peaking-EQ biquad (transposed direct form II), same topology and
@@ -33,16 +53,12 @@ struct BiquadPeaking {
     private var z2: Float = 0
 
     init(band: EqBand, sampleRate: Double) {
-        let amp = pow(10.0, Double(band.gainDb) / 40.0)
-        let omega = 2.0 * Double.pi * band.freqHz / sampleRate
-        let cosw = cos(omega)
-        let alpha = sin(omega) / (2.0 * band.q)
-        let a0 = 1.0 + alpha / amp
-        b0 = Float((1.0 + alpha * amp) / a0)
-        b1 = Float((-2.0 * cosw) / a0)
-        b2 = Float((1.0 - alpha * amp) / a0)
-        a1 = Float((-2.0 * cosw) / a0)
-        a2 = Float((1.0 - alpha / amp) / a0)
+        let c = peakingCoefficients(band, sampleRate: sampleRate)
+        b0 = Float(c.b0)
+        b1 = Float(c.b1)
+        b2 = Float(c.b2)
+        a1 = Float(c.a1)
+        a2 = Float(c.a2)
     }
 
     mutating func process(_ x: Float) -> Float {
@@ -82,9 +98,10 @@ public final class Equalizer {
     private var leftChain: [BiquadPeaking]
     private var rightChain: [BiquadPeaking]
 
-    /// `preampDb` nil selects automatic headroom: -(max positive band gain),
-    /// so full-scale input cannot clip at any band's center frequency.
-    /// Returns nil for invalid bands or preamp (never traps).
+    /// `preampDb` nil selects automatic headroom: -(measured worst-case
+    /// cascade boost), so full-scale input cannot clip at any frequency even
+    /// when boosted bands overlap. Returns nil for invalid bands or preamp
+    /// (never traps).
     public init?(bands: [EqBand], sampleRate: Double, preampDb: Float? = nil) {
         guard sampleRate.isFinite, sampleRate > 0 else { return nil }
         self.sampleRate = sampleRate
@@ -111,11 +128,8 @@ public final class Equalizer {
             guard preampDb.isFinite, preampDb <= 0, preampDb >= -60 else { return false }
         }
 
-        var maxBoost: Float = 0
-        for band in newBands {
-            maxBoost = max(maxBoost, band.gainDb)
-        }
-        effectivePreampDb = preampDb ?? -maxBoost
+        effectivePreampDb = preampDb
+            ?? -Self.cascadeMaxBoostDb(bands: newBands, sampleRate: sampleRate)
         preampLinear = pow(10, effectivePreampDb / 20)
         for (i, band) in newBands.enumerated() {
             leftChain[i] = BiquadPeaking(band: band, sampleRate: sampleRate)
@@ -138,12 +152,47 @@ public final class Equalizer {
                 l = leftChain[b].process(l)
                 r = rightChain[b].process(r)
             }
-            left[i] = l
-            right[i] = r
+            // A finite-but-enormous sample can overflow inside a boosted
+            // biquad; nothing non-finite may leave this module. (Poisoned
+            // filter state self-clears at the end-of-buffer flush.)
+            left[i] = l.isFinite ? l : 0
+            right[i] = r.isFinite ? r : 0
         }
         for b in 0..<activeBands {
             leftChain[b].flushState()
             rightChain[b].flushState()
         }
+    }
+
+    /// Worst-case combined boost of the cascade in dB, measured on a log
+    /// frequency grid (dense enough for the narrowest permitted band) plus a
+    /// small margin for grid interpolation error. Overlapping boosted bands
+    /// multiply, so this — not the largest single band — is what the auto
+    /// preamp must compensate. Allocation-free; callable from apply().
+    static func cascadeMaxBoostDb(bands: [EqBand], sampleRate: Double) -> Float {
+        guard !bands.isEmpty else { return 0 }
+        let points = 512
+        let fMin = 10.0
+        let fMax = 0.45 * sampleRate
+        let logStep = log(fMax / fMin) / Double(points - 1)
+        var maxDb = 0.0
+        for k in 0..<points {
+            let freq = fMin * exp(Double(k) * logStep)
+            let omega = 2.0 * Double.pi * freq / sampleRate
+            let c1 = cos(omega), s1 = sin(omega)
+            let c2 = cos(2 * omega), s2 = sin(2 * omega)
+            var db = 0.0
+            for band in bands {
+                let co = peakingCoefficients(band, sampleRate: sampleRate)
+                let numRe = co.b0 + co.b1 * c1 + co.b2 * c2
+                let numIm = -(co.b1 * s1 + co.b2 * s2)
+                let denRe = 1.0 + co.a1 * c1 + co.a2 * c2
+                let denIm = -(co.a1 * s1 + co.a2 * s2)
+                let mag2 = (numRe * numRe + numIm * numIm) / (denRe * denRe + denIm * denIm)
+                db += 10.0 * log10(mag2)
+            }
+            maxDb = max(maxDb, db)
+        }
+        return maxDb > 0 ? Float(maxDb) + 0.25 : 0
     }
 }

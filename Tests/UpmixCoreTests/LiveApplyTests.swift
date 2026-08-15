@@ -95,8 +95,11 @@ final class LiveApplyTests: XCTestCase {
     func testEqualizerApplyUsesAutoPreamp() {
         let eq = Equalizer(bands: [], sampleRate: sampleRate)!
         XCTAssertTrue(eq.apply(bands: [EqBand(freqHz: 1000, gainDb: 6)], preampDb: nil))
-        XCTAssertEqual(eq.effectivePreampDb, -6, accuracy: 1e-5)
-        XCTAssertEqual(eqGain(eq, at: 1000), 1.0, accuracy: 0.06)
+        XCTAssertLessThanOrEqual(eq.effectivePreampDb, -6)
+        XCTAssertGreaterThan(eq.effectivePreampDb, -7)
+        let g = eqGain(eq, at: 1000)
+        XCTAssertLessThanOrEqual(g, 1.005)
+        XCTAssertGreaterThan(g, 0.88)
     }
 
     func testEqualizerApplyRejectsInvalid() {

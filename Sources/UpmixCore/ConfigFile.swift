@@ -79,7 +79,7 @@ public struct DaemonSettings: Equatable {
                 }
                 let band = EqBand(freqHz: freq, gainDb: Float(gain), q: q)
                 guard band.validated(sampleRate: nominalSampleRate) != nil else {
-                    warnings.append("line \(line): eq_band out of range (freq < \(Int(nominalSampleRate / 2)), |gain| <= 24, q in [0.1, 18])")
+                    warnings.append("line \(line): eq_band out of range (freq in [10, \(Int(0.45 * nominalSampleRate))], |gain| <= 24, q in [0.1, 18])")
                     continue
                 }
                 guard settings.eqBands.count < maxEqBands else {
