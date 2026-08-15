@@ -60,6 +60,12 @@ attenuates by exactly that, so the EQ can never clip — even with overlapping
 boosted bands. A bad edit never takes audio down: invalid lines are logged
 and ignored.
 
+Prefer sliders? `make install-panel` (no sudo) puts a menu-bar app in
+`~/Applications` with 10 graphic-EQ sliders and the surround knobs; it just
+writes this config file. Hand-authored bands it can't represent (custom
+frequency, Q, or >12 dB) are preserved untouched. Remove with
+`make uninstall-panel`.
+
 ## Docking and undocking
 
 The daemon is resident and device-aware. Unplug the adapter (undock) and it
