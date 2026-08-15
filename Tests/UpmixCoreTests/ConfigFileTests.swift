@@ -90,6 +90,32 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertEqual(result.settings.upmix.rearDelayMs, 20, accuracy: 1e-9)
     }
 
+    func testCrlfLineEndingsParse() {
+        // Editors configured for CRLF (or files round-tripped through
+        // Windows) must parse identically to LF files.
+        let text = "rear_gain = 0.8\r\nlfe_gain = 0.3\r\n\r\neq_band = 60 4\r\n"
+        let result = DaemonSettings.parse(text)
+        XCTAssertTrue(result.warnings.isEmpty, "unexpected: \(result.warnings)")
+        XCTAssertEqual(result.settings.upmix.rearGain, 0.8, accuracy: 1e-6)
+        XCTAssertEqual(result.settings.upmix.lfeGain, 0.3, accuracy: 1e-6)
+        XCTAssertEqual(result.settings.eqBands.count, 1)
+    }
+
+    func testLoneCarriageReturnLineEndingsParse() {
+        let result = DaemonSettings.parse("rear_gain = 0.8\rlfe_gain = 0.3\r")
+        XCTAssertTrue(result.warnings.isEmpty, "unexpected: \(result.warnings)")
+        XCTAssertEqual(result.settings.upmix.rearGain, 0.8, accuracy: 1e-6)
+        XCTAssertEqual(result.settings.upmix.lfeGain, 0.3, accuracy: 1e-6)
+    }
+
+    func testTabSeparatedEqBandParses() {
+        let result = DaemonSettings.parse("eq_band =\t1000\t-2.5\t3.0")
+        XCTAssertTrue(result.warnings.isEmpty, "unexpected: \(result.warnings)")
+        XCTAssertEqual(result.settings.eqBands.count, 1)
+        XCTAssertEqual(result.settings.eqBands[0].gainDb, -2.5)
+        XCTAssertEqual(result.settings.eqBands[0].q, 3.0)
+    }
+
     func testLastValueWinsForScalars() {
         let result = DaemonSettings.parse("""
         rear_gain = 0.4

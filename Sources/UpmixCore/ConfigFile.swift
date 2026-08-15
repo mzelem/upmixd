@@ -32,7 +32,12 @@ public struct DaemonSettings: Equatable {
             return value
         }
 
-        for (index, rawLine) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+        // Normalize CRLF/CR before splitting: "\r\n" is a single Character in
+        // Swift, so splitting on "\n" alone would treat a CRLF file as one line.
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        for (index, rawLine) in normalized.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let line = index + 1
             let content = rawLine.prefix(while: { $0 != "#" })
             let trimmed = content.trimmingCharacters(in: .whitespaces)
@@ -69,7 +74,7 @@ public struct DaemonSettings: Equatable {
                     settings.eqPreampDb = Float(v)
                 }
             case "eq_band":
-                let parts = value.split(separator: " ", omittingEmptySubsequences: true)
+                let parts = value.split(whereSeparator: { $0 == " " || $0 == "\t" })
                 guard parts.count == 2 || parts.count == 3,
                       let freq = Double(parts[0]), let gain = Double(parts[1]),
                       let q = parts.count == 3 ? Double(parts[2]) : 1.41
