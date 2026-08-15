@@ -6,7 +6,7 @@
     <string>com.utw.upmixd</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/upmixd</string>
+        <string>__PREFIX__/bin/upmixd</string>
         <string>--set-default</string>
     </array>
     <key>RunAtLoad</key>
