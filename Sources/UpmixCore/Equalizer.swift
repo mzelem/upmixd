@@ -88,8 +88,14 @@ struct BiquadPeaking {
 public final class Equalizer {
     public static let maxBands = 16
 
-    public private(set) var bands: [EqBand]
+    /// Introspection only (copies); never called on the render thread.
+    public var bands: [EqBand] { Array(bandStorage) }
     public private(set) var effectivePreampDb: Float
+
+    // Preallocated and mutated with keepingCapacity so apply() — which runs
+    // on the render thread — never frees or allocates heap. Private and
+    // uniquely referenced, so no copy-on-write can trigger either.
+    private var bandStorage: ContiguousArray<EqBand>
 
     private let sampleRate: Double
     private var preampLinear: Float
@@ -105,7 +111,8 @@ public final class Equalizer {
     public init?(bands: [EqBand], sampleRate: Double, preampDb: Float? = nil) {
         guard sampleRate.isFinite, sampleRate > 0 else { return nil }
         self.sampleRate = sampleRate
-        self.bands = []
+        bandStorage = []
+        bandStorage.reserveCapacity(Self.maxBands)
         effectivePreampDb = 0
         preampLinear = 1
         activeBands = 0
@@ -136,7 +143,8 @@ public final class Equalizer {
             rightChain[i] = BiquadPeaking(band: band, sampleRate: sampleRate)
         }
         activeBands = newBands.count
-        bands = newBands
+        bandStorage.removeAll(keepingCapacity: true)
+        bandStorage.append(contentsOf: newBands)
         return true
     }
 
@@ -152,11 +160,14 @@ public final class Equalizer {
                 l = leftChain[b].process(l)
                 r = rightChain[b].process(r)
             }
-            // A finite-but-enormous sample can overflow inside a boosted
-            // biquad; nothing non-finite may leave this module. (Poisoned
-            // filter state self-clears at the end-of-buffer flush.)
-            left[i] = l.isFinite ? l : 0
-            right[i] = r.isFinite ? r : 0
+            // Hard-clamp at full scale: the downstream upmixer's no-clip
+            // math assumes |input| <= 1, and the clamp is the guarantee that
+            // holds even for configs beyond the preamp measurement's
+            // accuracy. Also drops non-finite values (overflow inside a
+            // boosted biquad); poisoned filter state self-clears at the
+            // end-of-buffer flush.
+            left[i] = l.isFinite ? min(max(l, -1), 1) : 0
+            right[i] = r.isFinite ? min(max(r, -1), 1) : 0
         }
         for b in 0..<activeBands {
             leftChain[b].flushState()
@@ -164,34 +175,87 @@ public final class Equalizer {
         }
     }
 
-    /// Worst-case combined boost of the cascade in dB, measured on a log
-    /// frequency grid (dense enough for the narrowest permitted band) plus a
-    /// small margin for grid interpolation error. Overlapping boosted bands
-    /// multiply, so this — not the largest single band — is what the auto
-    /// preamp must compensate. Allocation-free; callable from apply().
+    /// Cascade response in dB at one frequency.
+    private static func cascadeDb(
+        atFreq freq: Double, bands: [EqBand], sampleRate: Double
+    ) -> Double {
+        let omega = 2.0 * Double.pi * freq / sampleRate
+        let c1 = cos(omega), s1 = sin(omega)
+        let c2 = cos(2 * omega), s2 = sin(2 * omega)
+        var db = 0.0
+        for band in bands {
+            let co = peakingCoefficients(band, sampleRate: sampleRate)
+            let numRe = co.b0 + co.b1 * c1 + co.b2 * c2
+            let numIm = -(co.b1 * s1 + co.b2 * s2)
+            let denRe = 1.0 + co.a1 * c1 + co.a2 * c2
+            let denIm = -(co.a1 * s1 + co.a2 * s2)
+            let mag2 = (numRe * numRe + numIm * numIm) / (denRe * denRe + denIm * denIm)
+            db += 10.0 * log10(mag2)
+        }
+        return db
+    }
+
+    // Cluster offsets around each band center, in bandwidths. Narrow digital
+    // peaks (high Q, warped near Nyquist) live within a bandwidth of some
+    // band's f0; sampling there is what a global grid cannot do.
+    private static let clusterOffsets: [Double] = [-1, -0.5, -0.25, -0.125, 0, 0.125, 0.25, 0.5, 1]
+
+    /// Worst-case combined boost of the cascade in dB: a coarse log grid plus
+    /// a cluster of points around every band center (exact f0 included), then
+    /// golden-section refinement around the best sample. Overlapping boosted
+    /// bands multiply, so this — not the largest single band — is what the
+    /// auto preamp must compensate. Uses only stack allocation; callable from
+    /// apply(). Process() additionally hard-clamps at full scale, so even an
+    /// adversarial config beyond measurement accuracy cannot push more than
+    /// full scale downstream.
     static func cascadeMaxBoostDb(bands: [EqBand], sampleRate: Double) -> Float {
         guard !bands.isEmpty else { return 0 }
-        let points = 512
+        let gridPoints = 512
+        let total = gridPoints + bands.count * clusterOffsets.count
         let fMin = 10.0
         let fMax = 0.45 * sampleRate
-        let logStep = log(fMax / fMin) / Double(points - 1)
+        let logStep = log(fMax / fMin) / Double(gridPoints - 1)
+
         var maxDb = 0.0
-        for k in 0..<points {
-            let freq = fMin * exp(Double(k) * logStep)
-            let omega = 2.0 * Double.pi * freq / sampleRate
-            let c1 = cos(omega), s1 = sin(omega)
-            let c2 = cos(2 * omega), s2 = sin(2 * omega)
-            var db = 0.0
-            for band in bands {
-                let co = peakingCoefficients(band, sampleRate: sampleRate)
-                let numRe = co.b0 + co.b1 * c1 + co.b2 * c2
-                let numIm = -(co.b1 * s1 + co.b2 * s2)
-                let denRe = 1.0 + co.a1 * c1 + co.a2 * c2
-                let denIm = -(co.a1 * s1 + co.a2 * s2)
-                let mag2 = (numRe * numRe + numIm * numIm) / (denRe * denRe + denIm * denIm)
-                db += 10.0 * log10(mag2)
+        withUnsafeTemporaryAllocation(of: Double.self, capacity: total) { freqs in
+            for k in 0..<gridPoints {
+                freqs[k] = fMin * exp(Double(k) * logStep)
             }
-            maxDb = max(maxDb, db)
+            var idx = gridPoints
+            for band in bands {
+                let bandwidth = band.freqHz / band.q
+                for offset in clusterOffsets {
+                    freqs[idx] = min(max(band.freqHz + offset * bandwidth, fMin), fMax)
+                    idx += 1
+                }
+            }
+            var sortable = freqs // same memory; the struct itself needs var for sort()
+            sortable.sort()
+            var bestIndex = 0
+            for i in 0..<total {
+                let db = cascadeDb(atFreq: freqs[i], bands: bands, sampleRate: sampleRate)
+                if db > maxDb {
+                    maxDb = db
+                    bestIndex = i
+                }
+            }
+            // Golden-section refine inside the bracketing neighbours.
+            var lo = freqs[max(bestIndex - 1, 0)]
+            var hi = freqs[min(bestIndex + 1, total - 1)]
+            let phi = 0.6180339887498949
+            for _ in 0..<40 {
+                let a = hi - (hi - lo) * phi
+                let b = lo + (hi - lo) * phi
+                let dbA = cascadeDb(atFreq: a, bands: bands, sampleRate: sampleRate)
+                let dbB = cascadeDb(atFreq: b, bands: bands, sampleRate: sampleRate)
+                if dbA > dbB {
+                    hi = b
+                    maxDb = max(maxDb, dbA)
+                } else {
+                    lo = a
+                    maxDb = max(maxDb, dbB)
+                }
+            }
         }
         return maxDb > 0 ? Float(maxDb) + 0.25 : 0
     }

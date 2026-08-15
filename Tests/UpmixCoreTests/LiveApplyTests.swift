@@ -68,7 +68,8 @@ final class LiveApplyTests: XCTestCase {
 
     private func eqGain(_ eq: Equalizer, at freq: Double) -> Float {
         let n = 19200
-        var left: [Float] = (0..<n).map { Float(sin(2.0 * .pi * freq * Double($0) / sampleRate)) }
+        // Quarter scale to stay clear of the full-scale output clamp.
+        var left: [Float] = (0..<n).map { 0.25 * Float(sin(2.0 * .pi * freq * Double($0) / sampleRate)) }
         var right = left
         let input = sqrt(left[(n/2)...].map { $0 * $0 }.reduce(0, +) / Float(n / 2))
         left.withUnsafeMutableBufferPointer { l in

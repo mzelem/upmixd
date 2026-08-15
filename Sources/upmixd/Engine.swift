@@ -54,12 +54,24 @@ final class Engine {
     private let channelOutputs: [UnsafeMutablePointer<Float>]
 
     init(settings: DaemonSettings, sampleRate: Double) {
+        // Fallbacks below are unreachable while config validation and the
+        // pipeline share DaemonSettings.nominalSampleRate; the logs are the
+        // tripwire in case that invariant ever breaks.
         var upmixConfig = settings.upmix
         upmixConfig.sampleRate = sampleRate
-        upmixer = Upmixer(config: upmixConfig.validated() ?? UpmixConfig(sampleRate: sampleRate))
-        equalizer = Equalizer(
-            bands: settings.eqBands, sampleRate: sampleRate, preampDb: settings.eqPreampDb)
-            ?? Equalizer(bands: [], sampleRate: sampleRate)!
+        if let valid = upmixConfig.validated() {
+            upmixer = Upmixer(config: valid)
+        } else {
+            print("upmixd: warning: upmix settings invalid at \(Int(sampleRate))Hz; using defaults")
+            upmixer = Upmixer(config: UpmixConfig(sampleRate: sampleRate))
+        }
+        if let eq = Equalizer(
+            bands: settings.eqBands, sampleRate: sampleRate, preampDb: settings.eqPreampDb) {
+            equalizer = eq
+        } else {
+            print("upmixd: warning: EQ settings invalid at \(Int(sampleRate))Hz; EQ disabled")
+            equalizer = Equalizer(bands: [], sampleRate: sampleRate)!
+        }
         scratch = (0..<8).map { _ in
             let p = UnsafeMutablePointer<Float>.allocate(capacity: Engine.maxFrames)
             p.initialize(repeating: 0, count: Engine.maxFrames)

@@ -6,7 +6,9 @@ setvbuf(stdout, nil, _IOLBF, 0) // line-buffer logs under launchd
 
 let defaultCaptureUID = "BlackHole2ch_UID"
 let defaultPlaybackName = "USB Sound Device"
-let sampleRate = 48_000.0
+// Single source of truth shared with config validation, so bands the parser
+// accepts are always applicable to the running pipeline.
+let sampleRate = DaemonSettings.nominalSampleRate
 
 func usage() -> Never {
     print("""
@@ -143,10 +145,14 @@ final class Supervisor {
     // MARK: - Config file
 
     private func setupConfig() {
-        if let loaded = loadConfigFromDisk() {
+        if !FileManager.default.fileExists(atPath: configPath) {
+            writeDefaultConfig()
+        } else if let loaded = loadConfigFromDisk() {
             currentSettings = loaded
         } else {
-            writeDefaultConfig()
+            // Existing but unreadable (permissions, encoding): never
+            // overwrite the user's file; run on flag/default settings.
+            print("upmixd: warning: \(configPath) exists but is unreadable; keeping it untouched and using default settings")
         }
         lastConfigMtime = configMtime()
 
@@ -194,8 +200,11 @@ final class Supervisor {
         }
         configMissingLogged = false
         guard mtime != lastConfigMtime else { return }
+        // Consume the mtime only after a successful read, so a transiently
+        // unreadable file (mid-save) is retried on the next poll.
+        guard let loaded = loadConfigFromDisk() else { return }
         lastConfigMtime = mtime
-        guard let loaded = loadConfigFromDisk(), loaded != currentSettings else { return }
+        guard loaded != currentSettings else { return }
         currentSettings = loaded
         print("upmixd: config reloaded")
         engine?.submit(loaded)

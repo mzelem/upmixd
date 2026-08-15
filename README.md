@@ -36,6 +36,30 @@ time to bypass the upmixer; pick BlackHole again to come back.
 
 Logs: `~/Library/Logs/upmixd.log`. Uninstall: `make uninstall`.
 
+## Equalizer and live tuning
+
+All settings live in `~/.config/upmixd.conf` (created on first run; override
+with `--config`). The daemon reloads it within ~2 seconds of saving — edit,
+save, hear the change. Example:
+
+```
+rear_gain = 0.9
+rear_delay_ms = 25.0
+center_gain = 0.354
+lfe_gain = 0.45
+
+# equalizer: eq_band = <freq_hz> <gain_db> [<q>]   (up to 16 bands)
+eq_preamp_db = auto
+eq_band = 80 4
+eq_band = 3000 -2
+```
+
+The EQ is a cascade of peaking filters applied to the stereo mix before
+upmixing. `eq_preamp_db = auto` measures the worst-case combined boost and
+attenuates by exactly that, so the EQ can never clip — even with overlapping
+boosted bands. A bad edit never takes audio down: invalid lines are logged
+and ignored.
+
 ## Docking and undocking
 
 The daemon is resident and device-aware. Unplug the adapter (undock) and it

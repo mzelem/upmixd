@@ -16,7 +16,9 @@ final class EqualizerTests: XCTestCase {
     /// output/input RMS ratio measured over the second half.
     private func gain(of eq: Equalizer, at freq: Double) -> Float {
         let n = 19200
-        var left = sine(freq: freq, frames: n)
+        // Quarter scale: measure the linear response without engaging the
+        // full-scale output clamp (ratios are amplitude-independent).
+        var left = sine(freq: freq, frames: n).map { $0 * 0.25 }
         var right = left
         let input = rms(left[(n/2)...])
         left.withUnsafeMutableBufferPointer { l in
@@ -72,6 +74,37 @@ final class EqualizerTests: XCTestCase {
             XCTAssertLessThanOrEqual(
                 g, 1.005, "full-scale \(freq) Hz must not clip (measured \(g))")
         }
+    }
+
+    func testAutoPreampCoversNarrowBandNearNyquist() {
+        // The adversarial case for grid-based measurement: an extreme band
+        // (Q 18, +24 dB) near the top of the allowed range, where bilinear
+        // warping makes the digital peak far narrower than its analog width.
+        let freq = 21_440.0
+        let eq = Equalizer(
+            bands: [EqBand(freqHz: freq, gainDb: 24, q: 18)], sampleRate: sampleRate)!
+        XCTAssertLessThanOrEqual(eq.effectivePreampDb, -23.9,
+                                 "preamp must cover the (exact) +24 dB peak")
+        let g = gain(of: eq, at: freq)
+        XCTAssertLessThanOrEqual(g, 1.005, "full-scale tone at the band center must not clip")
+    }
+
+    func testOutputHardClampedAtFullScale() {
+        // Even with a user-forced preamp that cannot cover the boost, nothing
+        // beyond full scale may leave the EQ — the downstream upmixer's
+        // no-clip math assumes |input| <= 1.
+        let eq = Equalizer(
+            bands: [EqBand(freqHz: 1000, gainDb: 24)], sampleRate: sampleRate, preampDb: 0)!
+        let n = 9600
+        var left = sine(freq: 1000, frames: n)
+        var right = left
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in
+                eq.process(left: l.baseAddress!, right: r.baseAddress!, frames: n)
+            }
+        }
+        XCTAssertLessThanOrEqual(left.map(abs).max()!, 1.0)
+        XCTAssertGreaterThan(rms(left[(n/2)...]), 0.5, "clamped signal should still be loud")
     }
 
     func testOutputStaysFiniteForHugeFiniteInput() {
