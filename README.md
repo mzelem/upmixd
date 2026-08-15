@@ -35,10 +35,18 @@ time to bypass the upmixer; pick BlackHole again to come back.
 
 Logs: `~/Library/Logs/upmixd.log`. Uninstall: `make uninstall`.
 
+## Docking and undocking
+
+The daemon is resident and device-aware. Unplug the adapter (undock) and it
+falls the default output back to the built-in speakers, so laptop audio keeps
+working immediately. Plug it back in (dock) and it reattaches within about a
+second — CoreAudio device notifications, not polling — and points the default
+output back at BlackHole. No clicking around in Sound settings either way.
+
 ## Notes
 
 - Channel order matches the CM6206 6ch alt setting: FL FR FC LFE RL RR.
-- If the adapter is unplugged the daemon exits and launchd retries every 10 s
-  until it reappears.
 - Volume keys act on BlackHole while it is the default output; BlackHole
   applies that gain to the loopback stream itself.
+- launchd (`KeepAlive`) restarts the daemon only if it crashes or BlackHole
+  itself disappears; device churn is handled in-process.

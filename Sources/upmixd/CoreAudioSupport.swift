@@ -158,6 +158,23 @@ func isDeviceAlive(_ device: AudioDeviceID) -> Bool {
     return alive != 0
 }
 
+/// Built-in output found by transport type, not by UID: the speaker UID
+/// differs across Mac generations ("BuiltInSpeakerDevice" vs AppleHDA forms).
+func findBuiltInOutputDevice() -> AudioDeviceID? {
+    guard let devices = try? allDeviceIDs() else { return nil }
+    for device in devices {
+        var addr = address(kAudioDevicePropertyTransportType)
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &transport) == noErr,
+              transport == kAudioDeviceTransportTypeBuiltIn,
+              let streams = try? outputStreams(device), !streams.isEmpty
+        else { continue }
+        return device
+    }
+    return nil
+}
+
 func defaultOutputDevice() -> AudioDeviceID? {
     var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
     var device = AudioDeviceID(0)
