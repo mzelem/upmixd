@@ -55,8 +55,8 @@ eq_band = 3000 -2
 ```
 
 The EQ is a cascade of peaking filters applied to the stereo mix before
-upmixing. The default preamp is a fixed -6 dB of headroom — enough for every
-built-in preset — so adjusting one band never shifts the level of the others.
+upmixing. The default preamp is a fixed -6 dB of headroom — within a fraction of a dB
+of every built-in preset's worst case — so adjusting one band never shifts the level of the others.
 Set `eq_preamp_db = auto` instead to have the daemon measure the worst-case
 combined boost and attenuate by exactly that: guaranteed clip-free even with
 overlapping boosted bands, at the cost of the overall level moving as you

@@ -11,9 +11,10 @@ public struct DaemonSettings: Equatable {
     public var upmix = UpmixConfig()
     public var eqBands: [EqBand] = []
     /// nil = automatic headroom (measured worst-case cascade boost). The
-    /// default is a fixed -6 dB — constant headroom that covers every
-    /// built-in preset, so adjusting one band never shifts the level of the
-    /// others the way auto's re-measurement does.
+    /// default is a fixed -6 dB — constant headroom within a fraction of a dB
+    /// of every built-in preset's worst case (extremes touch the full-scale
+    /// limiter), so adjusting one band never shifts the level of the others
+    /// the way auto's re-measurement does.
     public var eqPreampDb: Float? = -6
 
     public init() {}
