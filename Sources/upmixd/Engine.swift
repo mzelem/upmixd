@@ -19,13 +19,18 @@ enum RenderHealth: Int32 {
 }
 
 /// Owns the aggregate device and its IOProc; bridges interleaved HAL buffers
-/// to the deinterleaved Upmixer.
+/// to the deinterleaved EQ + Upmixer chain.
 final class Engine {
     private static let maxFrames = 16384
 
     // Written from the render thread, read from the main thread. A plain
     // aligned 32-bit store/load; the race is benign (monitoring only).
     private let healthStorage: UnsafeMutablePointer<Int32>
+
+    // Settings handoff: main thread writes under the lock; the render thread
+    // only ever try-locks (never blocks) and applies any pending snapshot.
+    private let settingsLock: UnsafeMutablePointer<os_unfair_lock>
+    private var pendingSettings: DaemonSettings?
 
     var health: RenderHealth {
         RenderHealth(rawValue: healthStorage.pointee) ?? .unknown
@@ -39,6 +44,7 @@ final class Engine {
     }
 
     private let upmixer: Upmixer
+    private let equalizer: Equalizer
     private var aggregate: AudioDeviceID = 0
     private var ioProcID: AudioDeviceIOProcID?
     private var running = false
@@ -47,8 +53,13 @@ final class Engine {
     private let scratch: [UnsafeMutablePointer<Float>]
     private let channelOutputs: [UnsafeMutablePointer<Float>]
 
-    init(config: UpmixConfig) {
-        upmixer = Upmixer(config: config)
+    init(settings: DaemonSettings, sampleRate: Double) {
+        var upmixConfig = settings.upmix
+        upmixConfig.sampleRate = sampleRate
+        upmixer = Upmixer(config: upmixConfig.validated() ?? UpmixConfig(sampleRate: sampleRate))
+        equalizer = Equalizer(
+            bands: settings.eqBands, sampleRate: sampleRate, preampDb: settings.eqPreampDb)
+            ?? Equalizer(bands: [], sampleRate: sampleRate)!
         scratch = (0..<8).map { _ in
             let p = UnsafeMutablePointer<Float>.allocate(capacity: Engine.maxFrames)
             p.initialize(repeating: 0, count: Engine.maxFrames)
@@ -57,12 +68,23 @@ final class Engine {
         channelOutputs = Array(scratch[2...7])
         healthStorage = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
         healthStorage.initialize(to: RenderHealth.unknown.rawValue)
+        settingsLock = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
+        settingsLock.initialize(to: os_unfair_lock())
     }
 
     deinit {
         stop()
         scratch.forEach { $0.deallocate() }
         healthStorage.deallocate()
+        settingsLock.deallocate()
+    }
+
+    /// Hand new settings to the render thread; applied at the start of the
+    /// next IO cycle. Safe to call any time from the main thread.
+    func submit(_ settings: DaemonSettings) {
+        os_unfair_lock_lock(settingsLock)
+        pendingSettings = settings
+        os_unfair_lock_unlock(settingsLock)
     }
 
     func start(captureUID: String, playbackUID: String) throws {
@@ -102,7 +124,8 @@ final class Engine {
         running = false
     }
 
-    /// Real-time render path. No allocation, no locks, no ObjC.
+    /// Real-time render path. No allocation, no blocking (the settings lock
+    /// is try-only here), no ObjC.
     func render(
         input: UnsafePointer<AudioBufferList>,
         output: UnsafeMutablePointer<AudioBufferList>
@@ -141,6 +164,18 @@ final class Engine {
             Engine.maxFrames)
         guard frames > 0 else { return }
 
+        // Apply any settings the main thread handed over. If the lock is
+        // momentarily held by a submit, we simply pick the change up next
+        // cycle — never block the render thread.
+        if os_unfair_lock_trylock(settingsLock) {
+            if let settings = pendingSettings {
+                pendingSettings = nil
+                _ = upmixer.apply(settings.upmix)
+                _ = equalizer.apply(bands: settings.eqBands, preampDb: settings.eqPreampDb)
+            }
+            os_unfair_lock_unlock(settingsLock)
+        }
+
         let left = scratch[0]
         let right = scratch[1]
         for i in 0..<frames {
@@ -148,6 +183,7 @@ final class Engine {
             right[i] = inData[2 * i + 1]
         }
 
+        equalizer.process(left: left, right: right, frames: frames)
         upmixer.process(left: left, right: right, frames: frames, outputs: channelOutputs)
 
         for i in 0..<frames {

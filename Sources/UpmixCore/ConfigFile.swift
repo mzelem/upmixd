@@ -17,11 +17,14 @@ public struct DaemonSettings: Equatable {
 
     /// Forgiving line-based parse: `#` comments, blank lines, `key = value`.
     /// Unknown keys, malformed lines, and out-of-range values produce a
-    /// warning and leave the previous (default) value in place — a bad config
-    /// must never take the audio down. Scalar keys: last value wins.
-    /// `eq_band = <freq_hz> <gain_db> [<q>]` lines accumulate in order.
-    public static func parse(_ text: String) -> (settings: DaemonSettings, warnings: [String]) {
-        var settings = DaemonSettings()
+    /// warning and leave the `defaults` value in place — a bad config must
+    /// never take the audio down. Scalar keys: last value wins.
+    /// `eq_band = <freq_hz> <gain_db> [<q>]` lines accumulate in order,
+    /// appending to any bands already in `defaults`.
+    public static func parse(
+        _ text: String, defaults: DaemonSettings = DaemonSettings()
+    ) -> (settings: DaemonSettings, warnings: [String]) {
+        var settings = defaults
         var warnings: [String] = []
 
         func scalar(_ raw: String, _ key: String, min: Double, max: Double, line: Int) -> Double? {
