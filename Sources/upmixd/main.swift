@@ -147,14 +147,17 @@ final class Supervisor {
     private func setupConfig() {
         if !FileManager.default.fileExists(atPath: configPath) {
             writeDefaultConfig()
+            lastConfigMtime = configMtime()
         } else if let loaded = loadConfigFromDisk() {
             currentSettings = loaded
+            lastConfigMtime = configMtime()
         } else {
             // Existing but unreadable (permissions, encoding): never
             // overwrite the user's file; run on flag/default settings.
+            // lastConfigMtime stays nil so the poll keeps retrying the read
+            // even if the mtime never changes (e.g. a chmod fix).
             print("upmixd: warning: \(configPath) exists but is unreadable; keeping it untouched and using default settings")
         }
-        lastConfigMtime = configMtime()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 2, repeating: 2)

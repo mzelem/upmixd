@@ -123,9 +123,14 @@ public final class Equalizer {
         guard apply(bands: bands, preampDb: preampDb) else { return nil }
     }
 
-    /// Real-time-safe live update: validates, then rewrites coefficients in
-    /// place (filter state resets — a brief transient, not a glitch loop).
-    /// Returns false — changing nothing — on invalid input.
+    /// Live update: validates, then rewrites coefficients in place (filter
+    /// state resets — a brief transient, not a glitch loop). Returns false —
+    /// changing nothing — on invalid input.
+    ///
+    /// Real-time safety: with an EXPLICIT preampDb this is allocation-free
+    /// and render-thread safe. With nil (auto), the cascade measurement runs
+    /// and may allocate — resolve auto to a number off the render thread
+    /// first (see Engine.submit).
     public func apply(bands newBands: [EqBand], preampDb: Float?) -> Bool {
         guard newBands.count <= Self.maxBands else { return false }
         for band in newBands {
@@ -204,11 +209,11 @@ public final class Equalizer {
     /// a cluster of points around every band center (exact f0 included), then
     /// golden-section refinement around the best sample. Overlapping boosted
     /// bands multiply, so this — not the largest single band — is what the
-    /// auto preamp must compensate. Uses only stack allocation; callable from
-    /// apply(). Process() additionally hard-clamps at full scale, so even an
-    /// adversarial config beyond measurement accuracy cannot push more than
-    /// full scale downstream.
-    static func cascadeMaxBoostDb(bands: [EqBand], sampleRate: Double) -> Float {
+    /// auto preamp must compensate. May allocate (scratch buffer and sort);
+    /// call only off the render thread. Process() additionally hard-clamps at
+    /// full scale, so even an adversarial config beyond measurement accuracy
+    /// cannot push more than full scale downstream.
+    public static func cascadeMaxBoostDb(bands: [EqBand], sampleRate: Double) -> Float {
         guard !bands.isEmpty else { return 0 }
         let gridPoints = 512
         let total = gridPoints + bands.count * clusterOffsets.count

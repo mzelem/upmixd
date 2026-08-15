@@ -53,7 +53,10 @@ final class Engine {
     private let scratch: [UnsafeMutablePointer<Float>]
     private let channelOutputs: [UnsafeMutablePointer<Float>]
 
+    private let sampleRate: Double
+
     init(settings: DaemonSettings, sampleRate: Double) {
+        self.sampleRate = sampleRate
         // Fallbacks below are unreachable while config validation and the
         // pipeline share DaemonSettings.nominalSampleRate; the logs are the
         // tripwire in case that invariant ever breaks.
@@ -93,9 +96,17 @@ final class Engine {
 
     /// Hand new settings to the render thread; applied at the start of the
     /// next IO cycle. Safe to call any time from the main thread.
+    ///
+    /// The auto preamp is resolved HERE, on the main thread: the cascade
+    /// measurement allocates, so the render thread must only ever see an
+    /// explicit preamp (whose apply path is allocation-free).
     func submit(_ settings: DaemonSettings) {
+        var resolved = settings
+        let preamp = settings.eqPreampDb
+            ?? -Equalizer.cascadeMaxBoostDb(bands: settings.eqBands, sampleRate: sampleRate)
+        resolved.eqPreampDb = max(-60, min(0, preamp))
         os_unfair_lock_lock(settingsLock)
-        pendingSettings = settings
+        pendingSettings = resolved
         os_unfair_lock_unlock(settingsLock)
     }
 
