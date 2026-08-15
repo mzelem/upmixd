@@ -1,0 +1,4 @@
+.build/
+.notes/
+*.caf
+.DS_Store
