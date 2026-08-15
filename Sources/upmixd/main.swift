@@ -6,7 +6,9 @@ setvbuf(stdout, nil, _IOLBF, 0) // line-buffer logs under launchd
 
 let defaultCaptureUID = "BlackHole2ch_UID"
 let defaultPlaybackName = "USB Sound Device"
-let sampleRate = 48_000.0
+// Single source of truth shared with config validation, so bands the parser
+// accepts are always applicable to the running pipeline.
+let sampleRate = DaemonSettings.nominalSampleRate
 
 func usage() -> Never {
     print("""
@@ -28,6 +30,10 @@ func usage() -> Never {
           --rear-delay-ms <1..100> rear delay; longer = more spacious (default \(Int(UpmixConfig().rearDelayMs)))
           --center-gain <0..0.5> center level applied to L+R (default \(UpmixConfig().centerGain))
           --lfe-gain <0..0.45>   subwoofer level applied to L+R (default \(UpmixConfig().lfeGain))
+          --config <path>        settings file, reloaded live on change
+                                 (default: ~/.config/upmixd.conf; created with
+                                 current settings if missing). File values
+                                 override flag values.
           --list                 list audio devices and exit
 
         Gain upper bounds are the no-clipping limits for full-scale input.
@@ -52,7 +58,14 @@ final class Supervisor {
     private let playbackUID: String?
     private let playbackName: String
     private let manageDefault: Bool
-    private let configTemplate: UpmixConfig
+    private let configPath: String
+    /// Settings derived from CLI flags; the config file is parsed on top of
+    /// these, so the file wins where it speaks and flags fill the gaps.
+    private let seedSettings: DaemonSettings
+    private var currentSettings: DaemonSettings
+    private var configTimer: DispatchSourceTimer?
+    private var configMissingLogged = false
+    private var lastConfigMtime: Date?
 
     private var capture: AudioDeviceID = 0
     private var playback: AudioDeviceID = 0
@@ -66,16 +79,21 @@ final class Supervisor {
 
     init(
         captureUID: String, playbackUID: String?, playbackName: String,
-        manageDefault: Bool, configTemplate: UpmixConfig
+        manageDefault: Bool, configTemplate: UpmixConfig, configPath: String
     ) {
         self.captureUID = captureUID
         self.playbackUID = playbackUID
         self.playbackName = playbackName
         self.manageDefault = manageDefault
-        self.configTemplate = configTemplate
+        self.configPath = configPath
+        var seed = DaemonSettings()
+        seed.upmix = configTemplate
+        seedSettings = seed
+        currentSettings = seed
     }
 
     func run() throws {
+        setupConfig()
         capture = try findDevice(uid: captureUID)
 
         // Capture is a virtual driver device; it only disappears if BlackHole
@@ -122,6 +140,77 @@ final class Supervisor {
             }
         }
         exit(code)
+    }
+
+    // MARK: - Config file
+
+    private func setupConfig() {
+        if !FileManager.default.fileExists(atPath: configPath) {
+            writeDefaultConfig()
+            lastConfigMtime = configMtime()
+        } else if let loaded = loadConfigFromDisk() {
+            currentSettings = loaded
+            lastConfigMtime = configMtime()
+        } else {
+            // Existing but unreadable (permissions, encoding): never
+            // overwrite the user's file; run on flag/default settings.
+            // lastConfigMtime stays nil so the poll keeps retrying the read
+            // even if the mtime never changes (e.g. a chmod fix).
+            print("upmixd: warning: \(configPath) exists but is unreadable; keeping it untouched and using default settings")
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.setEventHandler { [weak self] in self?.pollConfig() }
+        timer.resume()
+        configTimer = timer
+    }
+
+    private func configMtime() -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: configPath))?[.modificationDate] as? Date
+    }
+
+    private func loadConfigFromDisk() -> DaemonSettings? {
+        guard let text = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            return nil
+        }
+        let result = DaemonSettings.parse(text, defaults: seedSettings)
+        for warning in result.warnings {
+            print("upmixd: config: \(warning)")
+        }
+        return result.settings
+    }
+
+    private func writeDefaultConfig() {
+        let directory = (configPath as NSString).deletingLastPathComponent
+        do {
+            try FileManager.default.createDirectory(
+                atPath: directory, withIntermediateDirectories: true)
+            try currentSettings.render().write(toFile: configPath, atomically: true, encoding: .utf8)
+            print("upmixd: wrote default config to \(configPath)")
+        } catch {
+            print("upmixd: warning: could not write default config to \(configPath): \(error)")
+        }
+    }
+
+    private func pollConfig() {
+        guard let mtime = configMtime() else {
+            if !configMissingLogged {
+                print("upmixd: config file \(configPath) disappeared; keeping current settings")
+                configMissingLogged = true
+            }
+            return
+        }
+        configMissingLogged = false
+        guard mtime != lastConfigMtime else { return }
+        // Consume the mtime only after a successful read, so a transiently
+        // unreadable file (mid-save) is retried on the next poll.
+        guard let loaded = loadConfigFromDisk() else { return }
+        lastConfigMtime = mtime
+        guard loaded != currentSettings else { return }
+        currentSettings = loaded
+        print("upmixd: config reloaded")
+        engine?.submit(loaded)
     }
 
     private func aliveAddress() -> AudioObjectPropertyAddress {
@@ -180,9 +269,7 @@ final class Supervisor {
                 usleep(100_000)
             }
 
-            var config = configTemplate
-            config.sampleRate = sampleRate
-            let newEngine = Engine(config: config)
+            let newEngine = Engine(settings: currentSettings, sampleRate: sampleRate)
             try newEngine.start(captureUID: captureUID, playbackUID: resolvedPlaybackUID)
             engine = newEngine
             activePlaybackUID = resolvedPlaybackUID
@@ -290,6 +377,7 @@ var playbackUID: String?
 var playbackName = defaultPlaybackName
 var setDefault = false
 var config = UpmixConfig()
+var configPath = FileManager.default.homeDirectoryForCurrentUser.path + "/.config/upmixd.conf"
 
 var args = ArraySlice(CommandLine.arguments.dropFirst())
 while let arg = args.popFirst() {
@@ -306,6 +394,7 @@ while let arg = args.popFirst() {
         config.centerGain = Float(parseNumber(args.popFirst(), flag: arg, min: 0, max: 0.5))
     case "--lfe-gain":
         config.lfeGain = Float(parseNumber(args.popFirst(), flag: arg, min: 0, max: 0.45))
+    case "--config": configPath = args.popFirst() ?? { usage() }()
     case "--list":
         for device in (try? allDeviceIDs()) ?? [] {
             print("\(device)\t\(deviceName(device) ?? "?")\t\(deviceUID(device) ?? "?")")
@@ -319,7 +408,7 @@ do {
     let supervisor = Supervisor(
         captureUID: captureUID, playbackUID: playbackUID,
         playbackName: playbackName, manageDefault: setDefault,
-        configTemplate: config)
+        configTemplate: config, configPath: configPath)
 
     // Signal handling is armed before run(): activation can block for seconds
     // and may already have re-pointed the default output, so a SIGTERM in
