@@ -24,9 +24,24 @@ func usage() -> Never {
           --set-default          manage the system default output: point it at
                                  the capture device while upmixing, restore it
                                  on shutdown/disconnect
+          --rear-gain <0..1>     rear speaker level (default \(UpmixConfig().rearGain))
+          --rear-delay-ms <1..100> rear delay; longer = more spacious (default \(Int(UpmixConfig().rearDelayMs)))
+          --center-gain <0..0.5> center level applied to L+R (default \(UpmixConfig().centerGain))
+          --lfe-gain <0..0.45>   subwoofer level applied to L+R (default \(UpmixConfig().lfeGain))
           --list                 list audio devices and exit
+
+        Gain upper bounds are the no-clipping limits for full-scale input.
         """)
     exit(64)
+}
+
+func parseNumber(_ raw: String?, flag: String, min: Double, max: Double) -> Double {
+    guard let raw, let value = Double(raw), value >= min, value <= max else {
+        FileHandle.standardError.write(
+            "upmixd: \(flag) requires a number in [\(min), \(max)]\n".data(using: .utf8)!)
+        exit(64)
+    }
+    return value
 }
 
 /// Owns the daemon lifecycle: waits for the playback device, runs the engine
@@ -37,6 +52,7 @@ final class Supervisor {
     private let playbackUID: String?
     private let playbackName: String
     private let manageDefault: Bool
+    private let configTemplate: UpmixConfig
 
     private var capture: AudioDeviceID = 0
     private var playback: AudioDeviceID = 0
@@ -48,11 +64,15 @@ final class Supervisor {
     private var pendingDeadline: DispatchTime = .distantFuture
     private var waitingLogged = false
 
-    init(captureUID: String, playbackUID: String?, playbackName: String, manageDefault: Bool) {
+    init(
+        captureUID: String, playbackUID: String?, playbackName: String,
+        manageDefault: Bool, configTemplate: UpmixConfig
+    ) {
         self.captureUID = captureUID
         self.playbackUID = playbackUID
         self.playbackName = playbackName
         self.manageDefault = manageDefault
+        self.configTemplate = configTemplate
     }
 
     func run() throws {
@@ -160,7 +180,9 @@ final class Supervisor {
                 usleep(100_000)
             }
 
-            let newEngine = Engine(config: UpmixConfig(sampleRate: sampleRate))
+            var config = configTemplate
+            config.sampleRate = sampleRate
+            let newEngine = Engine(config: config)
             try newEngine.start(captureUID: captureUID, playbackUID: resolvedPlaybackUID)
             engine = newEngine
             activePlaybackUID = resolvedPlaybackUID
@@ -267,6 +289,7 @@ var captureUID = defaultCaptureUID
 var playbackUID: String?
 var playbackName = defaultPlaybackName
 var setDefault = false
+var config = UpmixConfig()
 
 var args = ArraySlice(CommandLine.arguments.dropFirst())
 while let arg = args.popFirst() {
@@ -275,6 +298,14 @@ while let arg = args.popFirst() {
     case "--playback-uid": playbackUID = args.popFirst() ?? { usage() }()
     case "--playback-name": playbackName = args.popFirst() ?? { usage() }()
     case "--set-default": setDefault = true
+    case "--rear-gain":
+        config.rearGain = Float(parseNumber(args.popFirst(), flag: arg, min: 0, max: 1))
+    case "--rear-delay-ms":
+        config.rearDelayMs = parseNumber(args.popFirst(), flag: arg, min: 1, max: 100)
+    case "--center-gain":
+        config.centerGain = Float(parseNumber(args.popFirst(), flag: arg, min: 0, max: 0.5))
+    case "--lfe-gain":
+        config.lfeGain = Float(parseNumber(args.popFirst(), flag: arg, min: 0, max: 0.45))
     case "--list":
         for device in (try? allDeviceIDs()) ?? [] {
             print("\(device)\t\(deviceName(device) ?? "?")\t\(deviceUID(device) ?? "?")")
@@ -287,7 +318,8 @@ while let arg = args.popFirst() {
 do {
     let supervisor = Supervisor(
         captureUID: captureUID, playbackUID: playbackUID,
-        playbackName: playbackName, manageDefault: setDefault)
+        playbackName: playbackName, manageDefault: setDefault,
+        configTemplate: config)
 
     // Signal handling is armed before run(): activation can block for seconds
     // and may already have re-pointed the default output, so a SIGTERM in

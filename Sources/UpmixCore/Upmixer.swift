@@ -29,8 +29,10 @@ public struct UpmixConfig {
         // 0.45 keeps the low-pass overshoot (~1.09x on full-scale correlated
         // bass) under full scale: 2 * 0.45 * 1.09 ≈ 0.98.
         lfeGain: Float = 0.45,
-        rearDelayMs: Double = 15,
-        rearGain: Float = 0.7
+        // 25ms/0.9 chosen by ear on the 5.1 rig: 15ms/0.7 read as too subtle,
+        // the longer delay makes the rears register as their own presence.
+        rearDelayMs: Double = 25,
+        rearGain: Float = 0.9
     ) {
         self.sampleRate = sampleRate
         self.centerGain = centerGain

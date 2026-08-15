@@ -12,7 +12,8 @@ apps → BlackHole 2ch (system default output) → upmixd → USB Sound Device (
 
 `upmixd` captures the system mix from [BlackHole](https://github.com/ExistentialAudio/BlackHole),
 upmixes it (fronts passthrough, derived center, 120 Hz low-passed LFE,
-15 ms-delayed rears), and plays the result on the adapter through a private
+25 ms-delayed rears — see `upmixd --help` for the mix knobs), and plays the
+result on the adapter through a private
 aggregate device (adapter clock, drift-compensated capture). The DSP lives in
 `UpmixCore` and is fully unit-tested; the daemon is a thin CoreAudio shell.
 
