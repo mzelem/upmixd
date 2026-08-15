@@ -48,6 +48,31 @@ struct PanelView: View {
                 }
             }
 
+            HStack(spacing: 8) {
+                Text("Preamp")
+                    .font(.caption)
+                    .frame(width: 42, alignment: .trailing)
+                Toggle("Auto", isOn: Binding(
+                    get: { store.preampAuto },
+                    set: { store.preampAuto = $0; store.scheduleWrite() }))
+                    .toggleStyle(.checkbox)
+                    .controlSize(.mini)
+                Slider(
+                    value: Binding(
+                        get: { Double(store.preampDb) },
+                        set: { store.preampDb = Float($0); store.scheduleWrite() }),
+                    in: -24...0)
+                    .disabled(store.preampAuto)
+                Text(String(format: "%+.1f", store.effectivePreampDb))
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(width: 38, alignment: .trailing)
+            }
+            Text(store.preampAuto
+                 ? "Auto guarantees no clipping; boosts lower everything else instead."
+                 : "Manual preamp keeps loudness; extreme peaks hit the safety limiter.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             if !store.graphicEQ.customBands.isEmpty {
                 Text("+ \(store.graphicEQ.customBands.count) custom band(s) from the config file, preserved")
                     .font(.caption2)

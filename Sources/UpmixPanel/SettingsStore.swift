@@ -8,6 +8,9 @@ import UpmixCore
 @MainActor
 final class SettingsStore: ObservableObject {
     @Published var graphicEQ: GraphicEQ
+    @Published var preampAuto: Bool
+    /// Manual preamp in dB, used when preampAuto is off.
+    @Published var preampDb: Float
     @Published var rearGain: Float
     @Published var rearDelayMs: Double
     @Published var centerGain: Float
@@ -30,6 +33,8 @@ final class SettingsStore: ObservableObject {
         let settings = DaemonSettings()
         baseSettings = settings
         graphicEQ = GraphicEQ(from: settings)
+        preampAuto = settings.eqPreampDb == nil
+        preampDb = settings.eqPreampDb ?? 0
         rearGain = settings.upmix.rearGain
         rearDelayMs = settings.upmix.rearDelayMs
         centerGain = settings.upmix.centerGain
@@ -68,6 +73,9 @@ final class SettingsStore: ObservableObject {
         let settings = DaemonSettings.parse(text).settings
         baseSettings = settings
         graphicEQ = GraphicEQ(from: settings)
+        preampAuto = settings.eqPreampDb == nil
+        // 0 dB (full loudness) is the natural starting point when leaving auto.
+        preampDb = settings.eqPreampDb ?? 0
         rearGain = settings.upmix.rearGain
         rearDelayMs = settings.upmix.rearDelayMs
         centerGain = settings.upmix.centerGain
@@ -97,10 +105,22 @@ final class SettingsStore: ObservableObject {
         writeNow()
     }
 
+    /// What the daemon will actually apply, for display: the manual value, or
+    /// the measured worst-case cascade boost when on auto.
+    var effectivePreampDb: Float {
+        if preampAuto {
+            let bands = graphicEQ.applied(to: baseSettings).eqBands
+            return max(-60, -Equalizer.cascadeMaxBoostDb(
+                bands: bands, sampleRate: DaemonSettings.nominalSampleRate))
+        }
+        return preampDb
+    }
+
     private func writeNow() {
         writeDebounce = nil
         guard fileError == nil else { return } // never write over a file we couldn't read
         var settings = baseSettings
+        settings.eqPreampDb = preampAuto ? nil : preampDb
         settings.upmix.rearGain = rearGain
         settings.upmix.rearDelayMs = rearDelayMs
         settings.upmix.centerGain = centerGain
