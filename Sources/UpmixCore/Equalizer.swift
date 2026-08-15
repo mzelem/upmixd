@@ -2,7 +2,7 @@ import Foundation
 
 /// One peaking-EQ band. Q defaults to ~1.41, the conventional width for a
 /// 10-band (one-octave) graphic equalizer.
-public struct EqBand {
+public struct EqBand: Equatable {
     public var freqHz: Double
     public var gainDb: Float
     public var q: Double

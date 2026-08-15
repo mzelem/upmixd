@@ -10,7 +10,7 @@ public enum OutputChannel: Int, CaseIterable {
     case rearRight = 5
 }
 
-public struct UpmixConfig {
+public struct UpmixConfig: Equatable {
     public var sampleRate: Double
     /// Gain applied to (L+R) for the center channel.
     public var centerGain: Float
