@@ -38,6 +38,14 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertEqual(s.eqBands[0].q, 1.41, "default Q expected when omitted")
     }
 
+    func testDefaultPreampIsMinusSix() {
+        // Fixed -6 dB headroom by default: sliding one band must not change
+        // the level of everything else (auto re-measures per change and
+        // reads as a global volume shift). Auto remains opt-in.
+        XCTAssertEqual(DaemonSettings().eqPreampDb, -6)
+        XCTAssertEqual(DaemonSettings.parse("").settings.eqPreampDb, -6)
+    }
+
     func testPreampAutoKeyword() {
         let result = DaemonSettings.parse("eq_preamp_db = auto")
         XCTAssertNil(result.settings.eqPreampDb)

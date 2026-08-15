@@ -34,7 +34,7 @@ final class SettingsStore: ObservableObject {
         baseSettings = settings
         graphicEQ = GraphicEQ(from: settings)
         preampAuto = settings.eqPreampDb == nil
-        preampDb = settings.eqPreampDb ?? 0
+        preampDb = settings.eqPreampDb ?? -6
         rearGain = settings.upmix.rearGain
         rearDelayMs = settings.upmix.rearDelayMs
         centerGain = settings.upmix.centerGain
@@ -74,8 +74,8 @@ final class SettingsStore: ObservableObject {
         baseSettings = settings
         graphicEQ = GraphicEQ(from: settings)
         preampAuto = settings.eqPreampDb == nil
-        // 0 dB (full loudness) is the natural starting point when leaving auto.
-        preampDb = settings.eqPreampDb ?? 0
+        // -6 dB (the fixed-headroom default) is where leaving auto lands.
+        preampDb = settings.eqPreampDb ?? -6
         rearGain = settings.upmix.rearGain
         rearDelayMs = settings.upmix.rearDelayMs
         centerGain = settings.upmix.centerGain

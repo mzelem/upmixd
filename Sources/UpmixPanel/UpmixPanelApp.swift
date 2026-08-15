@@ -26,10 +26,15 @@ struct PanelView: View {
     }
 
     private func bandColumn(_ slot: Int) -> some View {
-        VStack(spacing: 3) {
-            Text(String(format: "%+.0f", store.graphicEQ.gainsDb[slot]))
+        let gain = store.graphicEQ.gainsDb[slot]
+        // Whole numbers read "+4"; fractional preset values keep a decimal
+        // ("+2.5"), and zero (either sign) is a plain dimmed "0".
+        let readout = gain == 0 ? "0"
+            : String(format: gain == gain.rounded() ? "%+.0f" : "%+.1f", gain)
+        return VStack(spacing: 3) {
+            Text(readout)
                 .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(store.graphicEQ.gainsDb[slot] == 0 ? .secondary : .primary)
+                .foregroundStyle(gain == 0 ? .secondary : .primary)
             Slider(
                 value: Binding(
                     get: { store.graphicEQ.gainsDb[slot] },
