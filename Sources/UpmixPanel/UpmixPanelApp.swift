@@ -141,7 +141,7 @@ struct PanelView: View {
                 if let error = store.fileError ?? store.writeError {
                     Text(error).font(.caption2).foregroundStyle(.red)
                 } else {
-                    Text("Changes apply within ~2 s")
+                    Text("Changes apply immediately")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()

@@ -39,8 +39,8 @@ Logs: `~/Library/Logs/upmixd.log`. Uninstall: `make uninstall`.
 ## Equalizer and live tuning
 
 All settings live in `~/.config/upmixd.conf` (created on first run; override
-with `--config`). The daemon reloads it within ~2 seconds of saving — edit,
-save, hear the change. Example:
+with `--config`). The daemon reloads it the instant you save (a directory
+watch, with a 10 s polling backstop) — edit, save, hear the change. Example:
 
 ```
 rear_gain = 0.9
