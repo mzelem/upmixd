@@ -16,8 +16,8 @@
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>StandardOutPath</key>
-    <string>/tmp/upmixd.log</string>
+    <string>__HOME__/Library/Logs/upmixd.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/upmixd.log</string>
+    <string>__HOME__/Library/Logs/upmixd.log</string>
 </dict>
 </plist>

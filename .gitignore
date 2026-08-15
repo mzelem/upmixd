@@ -2,3 +2,4 @@
 .notes/
 *.caf
 .DS_Store
+.swiftpm/

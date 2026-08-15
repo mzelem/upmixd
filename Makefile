@@ -11,9 +11,12 @@ test:
 	swift test
 
 install: build
+	sudo install -d -m 755 $(PREFIX)/bin
 	sudo install -m 755 .build/release/upmixd $(PREFIX)/bin/upmixd
-	install -m 644 dist/$(AGENT).plist $(AGENT_PLIST)
+	install -d $(HOME)/Library/LaunchAgents $(HOME)/Library/Logs
+	sed "s|__HOME__|$(HOME)|g" dist/$(AGENT).plist > $(AGENT_PLIST)
 	-launchctl bootout gui/$$(id -u) $(AGENT_PLIST) 2>/dev/null
+	sleep 1
 	launchctl bootstrap gui/$$(id -u) $(AGENT_PLIST)
 
 uninstall:

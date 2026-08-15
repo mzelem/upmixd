@@ -33,7 +33,7 @@ The LaunchAgent runs `upmixd --set-default`, which points the system default
 output at BlackHole on login. Pick a different output in Sound settings any
 time to bypass the upmixer; pick BlackHole again to come back.
 
-Logs: `/tmp/upmixd.log`. Uninstall: `make uninstall`.
+Logs: `~/Library/Logs/upmixd.log`. Uninstall: `make uninstall`.
 
 ## Notes
 
