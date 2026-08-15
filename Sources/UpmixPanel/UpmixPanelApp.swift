@@ -17,8 +17,47 @@ struct UpmixPanelApp: App {
 struct PanelView: View {
     @EnvironmentObject private var store: SettingsStore
 
+    private let columnWidth: CGFloat = 26
+    private let columnSpacing: CGFloat = 6
+    private let sliderLength: CGFloat = 110
+
     private func label(for freq: Double) -> String {
         freq >= 1000 ? "\(Int(freq / 1000))k" : "\(Int(freq))"
+    }
+
+    private func bandColumn(_ slot: Int) -> some View {
+        VStack(spacing: 3) {
+            Text(String(format: "%+.0f", store.graphicEQ.gainsDb[slot]))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(store.graphicEQ.gainsDb[slot] == 0 ? .secondary : .primary)
+            Slider(
+                value: Binding(
+                    get: { store.graphicEQ.gainsDb[slot] },
+                    set: { store.graphicEQ.gainsDb[slot] = $0; store.scheduleWrite() }
+                ),
+                in: -GraphicEQ.maxSliderDb...GraphicEQ.maxSliderDb,
+                step: 1)
+                .frame(width: sliderLength)
+                .rotationEffect(.degrees(-90))
+                .frame(width: columnWidth, height: sliderLength)
+            Text(label(for: GraphicEQ.standardFrequencies[slot]))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: columnWidth)
+    }
+
+    private func groupLabel(_ name: String, columns: Int) -> some View {
+        Text(name)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .frame(
+                width: CGFloat(columns) * columnWidth
+                    + CGFloat(columns - 1) * columnSpacing)
+            .overlay(alignment: .top) {
+                Rectangle().fill(.secondary.opacity(0.35)).frame(height: 1)
+                    .offset(y: -2)
+            }
     }
 
     var body: some View {
@@ -26,26 +65,27 @@ struct PanelView: View {
             HStack {
                 Text("Equalizer").font(.headline)
                 Spacer()
-                Button("Flat") { store.flatten() }
-                    .controlSize(.small)
+                Menu(EQPreset.matching(store.graphicEQ.gainsDb)?.name ?? "Custom") {
+                    ForEach(EQPreset.all) { preset in
+                        Button(preset.name) {
+                            store.graphicEQ.gainsDb = preset.gainsDb
+                            store.scheduleWrite()
+                        }
+                    }
+                }
+                .controlSize(.small)
+                .fixedSize()
             }
 
-            ForEach(GraphicEQ.standardFrequencies.indices, id: \.self) { slot in
-                HStack(spacing: 8) {
-                    Text(label(for: GraphicEQ.standardFrequencies[slot]))
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(width: 30, alignment: .trailing)
-                    Slider(
-                        value: Binding(
-                            get: { store.graphicEQ.gainsDb[slot] },
-                            set: { store.graphicEQ.gainsDb[slot] = $0; store.scheduleWrite() }
-                        ),
-                        in: -GraphicEQ.maxSliderDb...GraphicEQ.maxSliderDb,
-                        step: 0.5)
-                    Text(String(format: "%+.1f", store.graphicEQ.gainsDb[slot]))
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(width: 38, alignment: .trailing)
+            HStack(alignment: .bottom, spacing: columnSpacing) {
+                ForEach(GraphicEQ.standardFrequencies.indices, id: \.self) { slot in
+                    bandColumn(slot)
                 }
+            }
+            HStack(spacing: columnSpacing) {
+                groupLabel("Bass", columns: 3)
+                groupLabel("Midrange", columns: 4)
+                groupLabel("Treble", columns: 3)
             }
 
             HStack(spacing: 8) {
@@ -108,7 +148,7 @@ struct PanelView: View {
             }
         }
         .padding(12)
-        .frame(width: 300)
+        .frame(width: 340)
         .onAppear { store.reloadIfExternallyChanged() }
     }
 

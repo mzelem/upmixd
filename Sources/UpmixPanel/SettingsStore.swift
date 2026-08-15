@@ -92,11 +92,6 @@ final class SettingsStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
     }
 
-    func flatten() {
-        graphicEQ.gainsDb = [Float](repeating: 0, count: GraphicEQ.standardFrequencies.count)
-        scheduleWrite()
-    }
-
     /// Write any pending change immediately (e.g. before quitting).
     func flushPendingWrite() {
         guard writeDebounce != nil else { return }
