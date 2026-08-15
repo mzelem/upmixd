@@ -140,8 +140,11 @@ public final class Equalizer {
             guard preampDb.isFinite, preampDb <= 0, preampDb >= -60 else { return false }
         }
 
+        // Auto preamp floors at -60 dB, matching the explicit-preamp bound
+        // (and Engine.submit's clamp): beyond that the full-scale output
+        // clamp is the guarantee, not compensation.
         effectivePreampDb = preampDb
-            ?? -Self.cascadeMaxBoostDb(bands: newBands, sampleRate: sampleRate)
+            ?? max(-60, -Self.cascadeMaxBoostDb(bands: newBands, sampleRate: sampleRate))
         preampLinear = pow(10, effectivePreampDb / 20)
         for (i, band) in newBands.enumerated() {
             leftChain[i] = BiquadPeaking(band: band, sampleRate: sampleRate)
