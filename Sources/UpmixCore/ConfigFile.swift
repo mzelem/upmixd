@@ -4,7 +4,7 @@ import Foundation
 /// rendered to the plain `key = value` config file that the daemon watches
 /// and the (future) UI writes.
 public struct DaemonSettings: Equatable {
-    public static let maxEqBands = 16
+    public static let maxEqBands = Equalizer.maxBands
     /// Bands validate against the daemon's fixed pipeline rate.
     public static let nominalSampleRate = 48_000.0
 

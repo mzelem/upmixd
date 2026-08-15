@@ -95,21 +95,34 @@ struct BiquadLowpass {
     }
 }
 
-/// Fixed-length delay line backed by a ring buffer.
+/// Delay line with fixed capacity and live-settable length (both real-time
+/// safe; changing length repositions the read tap without reallocating).
 struct DelayLine {
     private var buffer: [Float]
-    private var index = 0
+    private var writeIndex = 0
+    private(set) var length: Int
 
-    init(delaySamples: Int) {
-        precondition(delaySamples > 0)
-        buffer = [Float](repeating: 0, count: delaySamples)
+    var capacity: Int { buffer.count }
+
+    init(capacity: Int, length: Int) {
+        precondition(capacity >= 1 && length >= 1 && length <= capacity)
+        buffer = [Float](repeating: 0, count: capacity)
+        self.length = length
+    }
+
+    mutating func setLength(_ newLength: Int) -> Bool {
+        guard newLength >= 1, newLength <= buffer.count else { return false }
+        length = newLength
+        return true
     }
 
     mutating func process(_ x: Float) -> Float {
-        let y = buffer[index]
-        buffer[index] = x
-        index += 1
-        if index == buffer.count { index = 0 }
+        var readIndex = writeIndex - length
+        if readIndex < 0 { readIndex += buffer.count }
+        let y = buffer[readIndex]
+        buffer[writeIndex] = x
+        writeIndex += 1
+        if writeIndex == buffer.count { writeIndex = 0 }
         return y
     }
 }
@@ -117,7 +130,7 @@ struct DelayLine {
 /// Stereo → 5.1 upmixer. Stateful (LFE filter, rear delay lines); call
 /// `process` with consecutive buffers of the same stream.
 public final class Upmixer {
-    public let config: UpmixConfig
+    public private(set) var config: UpmixConfig
     private var lfeFilter: BiquadLowpass
     private var rearLeftDelay: DelayLine
     private var rearRightDelay: DelayLine
@@ -129,8 +142,27 @@ public final class Upmixer {
         self.config = config
         lfeFilter = BiquadLowpass(cutoffHz: config.lfeCutoffHz, sampleRate: config.sampleRate)
         let delaySamples = Int(config.rearDelayMs / 1000.0 * config.sampleRate)
-        rearLeftDelay = DelayLine(delaySamples: delaySamples)
-        rearRightDelay = DelayLine(delaySamples: delaySamples)
+        // Capacity covers at least 100ms so the delay stays live-adjustable.
+        let capacity = max(delaySamples, Int(0.1 * config.sampleRate))
+        rearLeftDelay = DelayLine(capacity: capacity, length: delaySamples)
+        rearRightDelay = DelayLine(capacity: capacity, length: delaySamples)
+    }
+
+    /// Real-time-safe live update of the gains and rear delay. sampleRate and
+    /// lfeCutoffHz changes are ignored (they require reconstruction). Returns
+    /// false — changing nothing — if the config is invalid or the delay
+    /// exceeds the preallocated capacity.
+    public func apply(_ newConfig: UpmixConfig) -> Bool {
+        var candidate = newConfig
+        candidate.sampleRate = config.sampleRate
+        candidate.lfeCutoffHz = config.lfeCutoffHz
+        guard candidate.validated() != nil else { return false }
+        let delaySamples = Int(candidate.rearDelayMs / 1000.0 * config.sampleRate)
+        guard delaySamples <= rearLeftDelay.capacity else { return false }
+        config = candidate
+        _ = rearLeftDelay.setLength(delaySamples)
+        _ = rearRightDelay.setLength(delaySamples)
+        return true
     }
 
     /// Upmix `frames` samples of deinterleaved stereo into six output buffers

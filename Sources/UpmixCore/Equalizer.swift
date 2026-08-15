@@ -70,10 +70,15 @@ struct BiquadPeaking {
 /// locks, or ObjC in `process`. Non-finite input samples are treated as
 /// silence.
 public final class Equalizer {
-    public let bands: [EqBand]
-    public let effectivePreampDb: Float
+    public static let maxBands = 16
 
-    private let preampLinear: Float
+    public private(set) var bands: [EqBand]
+    public private(set) var effectivePreampDb: Float
+
+    private let sampleRate: Double
+    private var preampLinear: Float
+    private var activeBands: Int
+    // Fixed-size chains; slots beyond activeBands are never processed.
     private var leftChain: [BiquadPeaking]
     private var rightChain: [BiquadPeaking]
 
@@ -81,22 +86,44 @@ public final class Equalizer {
     /// so full-scale input cannot clip at any band's center frequency.
     /// Returns nil for invalid bands or preamp (never traps).
     public init?(bands: [EqBand], sampleRate: Double, preampDb: Float? = nil) {
-        var validatedBands: [EqBand] = []
-        for band in bands {
-            guard let valid = band.validated(sampleRate: sampleRate) else { return nil }
-            validatedBands.append(valid)
+        guard sampleRate.isFinite, sampleRate > 0 else { return nil }
+        self.sampleRate = sampleRate
+        self.bands = []
+        effectivePreampDb = 0
+        preampLinear = 1
+        activeBands = 0
+        let placeholder = BiquadPeaking(
+            band: EqBand(freqHz: 1000, gainDb: 0), sampleRate: sampleRate)
+        leftChain = [BiquadPeaking](repeating: placeholder, count: Self.maxBands)
+        rightChain = leftChain
+        guard apply(bands: bands, preampDb: preampDb) else { return nil }
+    }
+
+    /// Real-time-safe live update: validates, then rewrites coefficients in
+    /// place (filter state resets — a brief transient, not a glitch loop).
+    /// Returns false — changing nothing — on invalid input.
+    public func apply(bands newBands: [EqBand], preampDb: Float?) -> Bool {
+        guard newBands.count <= Self.maxBands else { return false }
+        for band in newBands {
+            guard band.validated(sampleRate: sampleRate) != nil else { return false }
         }
         if let preampDb {
-            guard preampDb.isFinite, preampDb <= 0, preampDb >= -60 else { return nil }
-            effectivePreampDb = preampDb
-        } else {
-            let maxBoost = validatedBands.map(\.gainDb).max() ?? 0
-            effectivePreampDb = -max(0, maxBoost)
+            guard preampDb.isFinite, preampDb <= 0, preampDb >= -60 else { return false }
         }
-        self.bands = validatedBands
+
+        var maxBoost: Float = 0
+        for band in newBands {
+            maxBoost = max(maxBoost, band.gainDb)
+        }
+        effectivePreampDb = preampDb ?? -maxBoost
         preampLinear = pow(10, effectivePreampDb / 20)
-        leftChain = validatedBands.map { BiquadPeaking(band: $0, sampleRate: sampleRate) }
-        rightChain = validatedBands.map { BiquadPeaking(band: $0, sampleRate: sampleRate) }
+        for (i, band) in newBands.enumerated() {
+            leftChain[i] = BiquadPeaking(band: band, sampleRate: sampleRate)
+            rightChain[i] = BiquadPeaking(band: band, sampleRate: sampleRate)
+        }
+        activeBands = newBands.count
+        bands = newBands
+        return true
     }
 
     public func process(
@@ -104,18 +131,17 @@ public final class Equalizer {
         right: UnsafeMutablePointer<Float>,
         frames: Int
     ) {
-        let bandCount = leftChain.count
         for i in 0..<frames {
             var l = left[i].isFinite ? left[i] * preampLinear : 0
             var r = right[i].isFinite ? right[i] * preampLinear : 0
-            for b in 0..<bandCount {
+            for b in 0..<activeBands {
                 l = leftChain[b].process(l)
                 r = rightChain[b].process(r)
             }
             left[i] = l
             right[i] = r
         }
-        for b in 0..<bandCount {
+        for b in 0..<activeBands {
             leftChain[b].flushState()
             rightChain[b].flushState()
         }
