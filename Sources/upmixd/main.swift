@@ -64,6 +64,7 @@ final class Supervisor {
     private let seedSettings: DaemonSettings
     private var currentSettings: DaemonSettings
     private var configTimer: DispatchSourceTimer?
+    private var configDirWatcher: DispatchSourceFileSystemObject?
     private var configMissingLogged = false
     private var lastConfigMtime: Date?
 
@@ -159,11 +160,36 @@ final class Supervisor {
             print("upmixd: warning: \(configPath) exists but is unreadable; keeping it untouched and using default settings")
         }
 
+        startConfigDirWatcher()
+
+        // Backstop only: the directory watcher delivers changes within
+        // milliseconds; the timer covers watcher-less fallback and any
+        // missed vnode edge cases.
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 2, repeating: 2)
+        timer.schedule(deadline: .now() + 10, repeating: 10)
         timer.setEventHandler { [weak self] in self?.pollConfig() }
         timer.resume()
         configTimer = timer
+    }
+
+    /// Watch the config's parent directory, not the file: atomic saves
+    /// replace the file's inode on every write (a file watch would go stale
+    /// after the first save), while the directory event fires for each
+    /// rename. pollConfig()'s mtime/equality gates make unrelated directory
+    /// events no-ops.
+    private func startConfigDirWatcher() {
+        let directory = (configPath as NSString).deletingLastPathComponent
+        let fd = open(directory, O_EVTONLY)
+        guard fd >= 0 else {
+            print("upmixd: warning: cannot watch \(directory); config changes apply on the 10s poll")
+            return
+        }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd, eventMask: .write, queue: .main)
+        source.setEventHandler { [weak self] in self?.pollConfig() }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        configDirWatcher = source
     }
 
     private func configMtime() -> Date? {

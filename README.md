@@ -39,8 +39,8 @@ Logs: `~/Library/Logs/upmixd.log`. Uninstall: `make uninstall`.
 ## Equalizer and live tuning
 
 All settings live in `~/.config/upmixd.conf` (created on first run; override
-with `--config`). The daemon reloads it within ~2 seconds of saving — edit,
-save, hear the change. Example:
+with `--config`). The daemon reloads it the instant you save (a directory
+watch, with a 10 s polling backstop) — edit, save, hear the change. Example:
 
 ```
 rear_gain = 0.9
@@ -49,16 +49,26 @@ center_gain = 0.354
 lfe_gain = 0.45
 
 # equalizer: eq_band = <freq_hz> <gain_db> [<q>]   (up to 16 bands)
-eq_preamp_db = auto
+eq_preamp_db = -6.0
 eq_band = 80 4
 eq_band = 3000 -2
 ```
 
 The EQ is a cascade of peaking filters applied to the stereo mix before
-upmixing. `eq_preamp_db = auto` measures the worst-case combined boost and
-attenuates by exactly that, so the EQ can never clip — even with overlapping
-boosted bands. A bad edit never takes audio down: invalid lines are logged
-and ignored.
+upmixing. The default preamp is a fixed -6 dB of headroom — within a fraction of a dB
+of every built-in preset's worst case — so adjusting one band never shifts the level of the others.
+Set `eq_preamp_db = auto` instead to have the daemon measure the worst-case
+combined boost and attenuate by exactly that: guaranteed clip-free even with
+overlapping boosted bands, at the cost of the overall level moving as you
+change the EQ. Boosts beyond the fixed headroom on full-scale content hit a
+hard full-scale limiter rather than distorting downstream. A bad edit never
+takes audio down: invalid lines are logged and ignored.
+
+Prefer sliders? `make install-panel` (no sudo) puts a menu-bar app in
+`~/Applications` with 10 graphic-EQ sliders and the surround knobs; it just
+writes this config file. Hand-authored bands it can't represent (custom
+frequency, Q, or >12 dB) are preserved untouched. Remove with
+`make uninstall-panel`.
 
 ## Docking and undocking
 
