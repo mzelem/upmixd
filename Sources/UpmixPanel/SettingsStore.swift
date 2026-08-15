@@ -12,7 +12,11 @@ final class SettingsStore: ObservableObject {
     @Published var rearDelayMs: Double
     @Published var centerGain: Float
     @Published var lfeGain: Float
+    /// Read problem: blocks writes (never write over a file we couldn't read).
     @Published private(set) var fileError: String?
+    /// Write problem: surfaced in the UI but writes keep retrying, so one
+    /// transient failure (disk full, permissions blip) can't mute the panel.
+    @Published private(set) var writeError: String?
 
     let configPath: String
 
@@ -48,6 +52,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func reload() {
+        // A pending debounced write captured pre-reload state; drop it.
+        writeDebounce?.cancel()
+        writeDebounce = nil
         lastKnownMtime = fileMtime()
         guard FileManager.default.fileExists(atPath: configPath) else {
             fileError = "\(configPath) not found — is upmixd installed?"
@@ -82,7 +89,16 @@ final class SettingsStore: ObservableObject {
         scheduleWrite()
     }
 
+    /// Write any pending change immediately (e.g. before quitting).
+    func flushPendingWrite() {
+        guard writeDebounce != nil else { return }
+        writeDebounce?.cancel()
+        writeDebounce = nil
+        writeNow()
+    }
+
     private func writeNow() {
+        writeDebounce = nil
         guard fileError == nil else { return } // never write over a file we couldn't read
         var settings = baseSettings
         settings.upmix.rearGain = rearGain
@@ -90,12 +106,13 @@ final class SettingsStore: ObservableObject {
         settings.upmix.centerGain = centerGain
         settings.upmix.lfeGain = lfeGain
         settings = graphicEQ.applied(to: settings)
-        baseSettings = settings
         do {
             try settings.render().write(toFile: configPath, atomically: true, encoding: .utf8)
+            baseSettings = settings
             lastKnownMtime = fileMtime()
+            writeError = nil
         } catch {
-            fileError = "could not write \(configPath): \(error.localizedDescription)"
+            writeError = "could not write \(configPath): \(error.localizedDescription)"
         }
     }
 }

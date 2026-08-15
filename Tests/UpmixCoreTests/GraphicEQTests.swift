@@ -81,6 +81,43 @@ final class GraphicEQTests: XCTestCase {
         XCTAssertEqual(GraphicEQ(from: reparsed.settings).gainsDb, eq.gainsDb)
     }
 
+    func testDuplicateStandardFrequencyBandsAreNotLost() {
+        // Two hand-authored bands on the same standard frequency: one takes
+        // the slider slot, the other must be preserved as custom — never
+        // silently dropped.
+        var settings = DaemonSettings()
+        settings.eqBands = [
+            EqBand(freqHz: 1000, gainDb: 3),
+            EqBand(freqHz: 1000, gainDb: 4),
+        ]
+        let eq = GraphicEQ(from: settings)
+        XCTAssertEqual(eq.gainsDb[5], 3, "first band takes the slot")
+        XCTAssertEqual(eq.customBands, [EqBand(freqHz: 1000, gainDb: 4)])
+
+        let out = eq.applied(to: settings)
+        XCTAssertEqual(out.eqBands.count, 2, "both bands survive a write")
+    }
+
+    func testAppliedNeverExceedsMaxBands() {
+        // 10 custom bands + 10 non-zero sliders would be 20; the cap is 16
+        // and the daemon truncates beyond it. Custom bands always survive;
+        // the quietest sliders are sacrificed.
+        var settings = DaemonSettings()
+        settings.eqBands = (0..<10).map { EqBand(freqHz: 300 + Double($0) * 7, gainDb: 2) }
+        var eq = GraphicEQ(from: settings)
+        eq.gainsDb = [1, -2, 3, -4, 5, -6, 7, -8, 9, -10]
+
+        let out = eq.applied(to: settings)
+        XCTAssertEqual(out.eqBands.count, DaemonSettings.maxEqBands)
+        for band in settings.eqBands {
+            XCTAssertTrue(out.eqBands.contains(band), "custom band \(band.freqHz) must survive")
+        }
+        // The six kept sliders are the six loudest: |gain| 5..10.
+        let sliderBands = out.eqBands.filter { !settings.eqBands.contains($0) }
+        XCTAssertEqual(sliderBands.count, 6)
+        XCTAssertTrue(sliderBands.allSatisfy { abs($0.gainDb) >= 5 })
+    }
+
     func testSliderGainsClampToUiRange() {
         var eq = GraphicEQ(from: DaemonSettings())
         eq.gainsDb[3] = 40

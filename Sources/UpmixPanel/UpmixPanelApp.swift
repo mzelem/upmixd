@@ -68,15 +68,18 @@ struct PanelView: View {
 
             Divider()
             HStack {
-                if let error = store.fileError {
+                if let error = store.fileError ?? store.writeError {
                     Text(error).font(.caption2).foregroundStyle(.red)
                 } else {
                     Text("Changes apply within ~2 s")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Quit") { NSApplication.shared.terminate(nil) }
-                    .controlSize(.small)
+                Button("Quit") {
+                    store.flushPendingWrite()
+                    NSApplication.shared.terminate(nil)
+                }
+                .controlSize(.small)
             }
         }
         .padding(12)
