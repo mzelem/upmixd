@@ -123,7 +123,7 @@ settings either way.
 ## Support
 
 If upmixd is useful to you, you can [buy me a coffee](https://buymeacoffee.com/mzelem)
-— though honestly, it being useful already made my day.
+— though honestly, if it's useful to you it's already made my day.
 
 ## License
 
