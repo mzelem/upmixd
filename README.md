@@ -1,46 +1,58 @@
 # upmixd
 
-System-wide stereo → 5.1 upmixer for macOS, built for a Vantec (C-Media
-CM6206) USB 7.1 adapter driving 5.1 analog speakers.
+System-wide stereo → 5.1 upmixing for macOS, with a live parametric EQ and a
+menu-bar control panel.
 
-macOS never upmixes: stereo sources only ever reach the front pair, even when
-the output device runs 6 channels. `upmixd` fixes that for everything at once:
+macOS never upmixes: stereo sources only reach the front pair of a surround
+speaker rig, even when the output device runs 6 channels. Linux's sound
+server fills all speakers by default; Windows has driver-level "speaker
+fill"; macOS has nothing. `upmixd` is that missing layer:
 
 ```
-apps → BlackHole 2ch (system default output) → upmixd → USB Sound Device (6ch)
+apps → BlackHole 2ch (system default output) → upmixd → your 5.1 device
 ```
 
-`upmixd` captures the system mix from [BlackHole](https://github.com/ExistentialAudio/BlackHole),
-upmixes it (fronts passthrough, derived center, 120 Hz low-passed LFE,
-25 ms-delayed rears — see `upmixd --help` for the mix knobs), and plays the
-result on the adapter through a private
-aggregate device (adapter clock, drift-compensated capture). The DSP lives in
-`UpmixCore` and is fully unit-tested; the daemon is a thin CoreAudio shell.
+The daemon captures the system mix from [BlackHole](https://github.com/ExistentialAudio/BlackHole),
+applies an optional EQ, upmixes (fronts passthrough, derived center, low-passed
+LFE, delayed rears), and plays the result on your multichannel output through
+a private aggregate device — hardware-clocked, drift-compensated.
 
-The adapter itself needs no driver: it is a standard USB Audio Class 1.0
-device whose 6/8-channel formats macOS supports natively — it just defaults
-to the 2-channel alt setting. `upmixd` forces the 6ch/16-bit/48 kHz format on
-startup.
+- **No custom driver.** Class-compliant USB surround adapters (e.g. the
+  C-Media CM6206 family) already work with macOS's built-in driver; they just
+  default to 2-channel. `upmixd` switches them to 6ch/48kHz itself.
+- **Clip-proof DSP.** The EQ's auto-headroom mode measures the worst-case
+  cascade boost; a full-scale limiter backstops everything. All DSP is
+  unit-tested and allocation-free on the audio thread.
+- **Self-healing.** Unplug the output device (undock) and the default output
+  falls back to the built-in speakers; plug it back in and surround returns
+  within a second. A health probe restarts the pipeline if it ever goes
+  silently wrong.
+- **One config file.** `~/.config/upmixd.conf`, human-editable, reloaded the
+  instant you save (directory watch, 10 s polling backstop). The menu-bar
+  panel is just a pretty way to write it.
 
 ## Install
 
 ```sh
-brew install --cask blackhole-2ch   # needs password + coreaudiod restart
-make test
-make install                        # /usr/local/bin/upmixd + LaunchAgent
+brew install --cask blackhole-2ch   # virtual audio driver (one-time)
+sudo killall coreaudiod             # or reboot, to load it
+
+brew install mzelem/tap/upmixd
+brew services start upmixd          # starts now and at every login
+upmixd-panel install                # optional menu-bar EQ panel
 ```
 
-The LaunchAgent runs `upmixd --set-default`, which points the system default
-output at BlackHole on login. Pick a different output in Sound settings any
-time to bypass the upmixer; pick BlackHole again to come back.
+From source instead: clone, `make test`, `make install` (daemon, needs sudo
+for /usr/local/bin) and `make install-panel` (panel, no sudo).
 
-Logs: `~/Library/Logs/upmixd.log`. Uninstall: `make uninstall`.
+The daemon points the system default output at BlackHole while it runs and
+puts it back on real speakers (the surround device, or the built-in speakers
+if it's unplugged) when it stops (`brew services stop upmixd`).
 
-## Equalizer and live tuning
+## Equalizer and tuning
 
 All settings live in `~/.config/upmixd.conf` (created on first run; override
-with `--config`). The daemon reloads it the instant you save (a directory
-watch, with a 10 s polling backstop) — edit, save, hear the change. Example:
+with `--config`). Edit and save — the daemon reloads instantly. Example:
 
 ```
 rear_gain = 0.9
@@ -55,33 +67,48 @@ eq_band = 3000 -2
 ```
 
 The EQ is a cascade of peaking filters applied to the stereo mix before
-upmixing. The default preamp is a fixed -6 dB of headroom — within a fraction of a dB
-of every built-in preset's worst case — so adjusting one band never shifts the level of the others.
-Set `eq_preamp_db = auto` instead to have the daemon measure the worst-case
-combined boost and attenuate by exactly that: guaranteed clip-free even with
-overlapping boosted bands, at the cost of the overall level moving as you
-change the EQ. Boosts beyond the fixed headroom on full-scale content hit a
-hard full-scale limiter rather than distorting downstream. A bad edit never
-takes audio down: invalid lines are logged and ignored.
+upmixing. The default preamp is a fixed -6 dB of headroom — within a fraction
+of a dB of every built-in preset's worst case — so adjusting one band never
+shifts the level of the others. Set `eq_preamp_db = auto` to have the daemon
+measure the worst-case combined boost and attenuate by exactly that:
+guaranteed clip-free even with overlapping boosted bands, at the cost of the
+overall level moving as you change the EQ. Boosts beyond the headroom on
+full-scale content hit a hard full-scale limiter rather than distorting
+downstream. A bad edit never takes audio down: invalid lines are logged and
+ignored.
 
-Prefer sliders? `make install-panel` (no sudo) puts a menu-bar app in
-`~/Applications` with 10 graphic-EQ sliders and the surround knobs; it just
-writes this config file. Hand-authored bands it can't represent (custom
-frequency, Q, or >12 dB) are preserved untouched. Remove with
-`make uninstall-panel`.
+The panel (`upmixd-panel install`) gives you 10 vertical sliders with
+Bass/Midrange/Treble groups, presets (Rock, Jazz, Bass Boost, …), the preamp
+control, and the surround knobs. Hand-authored config bands it can't
+represent (custom frequency, Q, or >12 dB) are preserved untouched.
 
 ## Docking and undocking
 
-The daemon is resident and device-aware. Unplug the adapter (undock) and it
+The daemon is resident and device-aware. Unplug the output device and it
 falls the default output back to the built-in speakers, so laptop audio keeps
-working immediately. Plug it back in (dock) and it reattaches within about a
-second — CoreAudio device notifications, not polling — and points the default
-output back at BlackHole. No clicking around in Sound settings either way.
+working immediately. Plug it back in and it reattaches within about a second
+and points the default output back at BlackHole. No clicking around in Sound
+settings either way.
 
 ## Notes
 
-- Channel order matches the CM6206 6ch alt setting: FL FR FC LFE RL RR.
-- Volume keys act on BlackHole while it is the default output; BlackHole
-  applies that gain to the loopback stream itself.
-- launchd (`KeepAlive`) restarts the daemon only if it crashes or BlackHole
-  itself disappears; device churn is handled in-process.
+- Output channel order follows the CM6206 6ch layout: FL FR FC LFE RL RR.
+- Volume keys work: BlackHole applies that gain to the loopback stream.
+- Stereo music fills all speakers via the upmix; native 5.1 content plays
+  through channel-for-channel.
+- Logs: `~/Library/Logs/upmixd.log` (Makefile install) or
+  `$(brew --prefix)/var/log/upmixd.log` (brew services).
+- Uninstall: `brew services stop upmixd && brew uninstall upmixd`,
+  `upmixd-panel uninstall`, and optionally the blackhole-2ch cask.
+
+## Roadmap
+
+- Signed, notarized one-click `.pkg` installer bundling a renamed virtual
+  device ("Surround Speakers (upmixd)") so the Sound menu says what you'll
+  actually hear — pending an Apple Developer ID.
+- Per-output-channel EQ (room correction).
+
+## License
+
+MIT. BlackHole is a separate project (GPL-3.0) installed from its own
+official distribution; upmixd does not link against or bundle it.
