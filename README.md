@@ -37,7 +37,9 @@ a private aggregate device — hardware-clocked, drift-compensated.
 brew install --cask blackhole-2ch   # virtual audio driver (one-time)
 sudo killall coreaudiod             # or reboot, to load it
 
-brew install mzelem/tap/upmixd
+brew tap mzelem/tap
+brew trust mzelem/tap              # Homebrew requires trusting third-party taps
+brew install upmixd
 brew services start upmixd          # starts now and at every login
 upmixd-panel install                # optional menu-bar EQ panel
 ```
