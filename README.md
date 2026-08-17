@@ -118,6 +118,11 @@ settings either way.
 - Discrete 5.1 passthrough via an 8-channel capture device, so surround
   sources keep their original channels instead of a downmix→upmix trip.
 
+## Support
+
+If upmixd is useful to you, you can [buy me a coffee](https://buymeacoffee.com/mzelem)
+— though honestly, it being useful already made my day.
+
 ## License
 
 MIT. BlackHole is a separate project (GPL-3.0) installed from its own
