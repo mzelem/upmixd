@@ -84,7 +84,7 @@ public struct DaemonSettings: Equatable {
                 let parts = value.split(whereSeparator: { $0 == " " || $0 == "\t" })
                 guard parts.count == 2 || parts.count == 3,
                       let freq = Double(parts[0]), let gain = Double(parts[1]),
-                      let q = parts.count == 3 ? Double(parts[2]) : 1.41
+                      let q = parts.count == 3 ? Double(parts[2]) : EqBand.defaultQ
                 else {
                     warnings.append("line \(line): eq_band requires <freq_hz> <gain_db> [<q>]")
                     continue

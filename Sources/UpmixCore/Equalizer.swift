@@ -7,7 +7,12 @@ public struct EqBand: Equatable {
     public var gainDb: Float
     public var q: Double
 
-    public init(freqHz: Double, gainDb: Float, q: Double = 1.41) {
+    /// Single source of truth for the default (one-octave graphic-EQ) Q:
+    /// ConfigFile's fallback and GraphicEQ's slider-adoption test both key
+    /// off exact equality with this value.
+    public static let defaultQ = 1.41
+
+    public init(freqHz: Double, gainDb: Float, q: Double = EqBand.defaultQ) {
         self.freqHz = freqHz
         self.gainDb = gainDb
         self.q = q
@@ -88,8 +93,11 @@ struct BiquadPeaking {
 public final class Equalizer {
     public static let maxBands = 16
 
-    /// Introspection only (copies); never called on the render thread.
-    public var bands: [EqBand] { Array(bandStorage) }
+    /// Introspection only; never call on the render thread. The `map` forces
+    /// a genuinely fresh array — `Array(ContiguousArray)` would share the
+    /// buffer and let an outside holder trigger copy-on-write inside the
+    /// render thread's next apply().
+    public var bands: [EqBand] { bandStorage.map { $0 } }
     public private(set) var effectivePreampDb: Float
 
     // Preallocated and mutated with keepingCapacity so apply() — which runs
