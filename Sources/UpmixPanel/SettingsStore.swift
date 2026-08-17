@@ -114,6 +114,17 @@ final class SettingsStore: ObservableObject {
     private func writeNow() {
         writeDebounce = nil
         guard fileError == nil else { return } // never write over a file we couldn't read
+        // If the file changed externally while the panel was open, re-read it
+        // as the base so the write composes slider intent with hand edits
+        // (custom bands, preamp mode) instead of clobbering them.
+        if fileMtime() != lastKnownMtime,
+           let text = try? String(contentsOfFile: configPath, encoding: .utf8) {
+            let fresh = DaemonSettings.parse(text).settings
+            baseSettings = fresh
+            var merged = GraphicEQ(from: fresh)
+            merged.gainsDb = graphicEQ.gainsDb // sliders are the user's latest intent
+            graphicEQ = merged
+        }
         var settings = baseSettings
         settings.eqPreampDb = preampAuto ? nil : preampDb
         settings.upmix.rearGain = rearGain

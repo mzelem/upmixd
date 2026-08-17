@@ -36,6 +36,9 @@ class Upmixd < Formula
 
       Start the daemon (also starts at login):
         brew services start upmixd
+      Grant microphone access when macOS asks — capturing from BlackHole
+      counts as audio input; silence with a healthy log usually means the
+      permission was denied (System Settings > Privacy > Microphone).
 
       Optional menu-bar panel with EQ sliders:
         upmixd-panel install

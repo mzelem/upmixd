@@ -45,9 +45,14 @@ upmixd-panel install                # optional menu-bar EQ panel
 From source instead: clone, `make test`, `make install` (daemon, needs sudo
 for /usr/local/bin) and `make install-panel` (panel, no sudo).
 
+**Grant microphone access when macOS asks.** Capturing system audio from
+BlackHole counts as audio input, so the first run triggers the standard
+microphone permission prompt. If you get silence with a healthy-looking log,
+check System Settings → Privacy & Security → Microphone.
+
 The daemon points the system default output at BlackHole while it runs and
-puts it back on real speakers (the surround device, or the built-in speakers
-if it's unplugged) when it stops (`brew services stop upmixd`).
+puts it back on real speakers (the surround device, or the built-in/other
+speakers if it's unplugged) when it stops (`brew services stop upmixd`).
 
 ## Equalizer and tuning
 
@@ -87,8 +92,9 @@ represent (custom frequency, Q, or >12 dB) are preserved untouched.
 ## Docking and undocking
 
 The daemon is resident and device-aware. Unplug the output device and it
-falls the default output back to the built-in speakers, so laptop audio keeps
-working immediately. Plug it back in and it reattaches within about a second
+switches the default output back to the built-in speakers (or the next real
+output device on Macs without them), so local audio keeps working
+immediately. Plug it back in and it reattaches within about a second
 and points the default output back at BlackHole. No clicking around in Sound
 settings either way.
 
@@ -119,6 +125,8 @@ settings either way.
 - Per-output-channel EQ (room correction).
 - Discrete 5.1 passthrough via an 8-channel capture device, so surround
   sources keep their original channels instead of a downmix→upmix trip.
+- Input-silence detection, so a denied microphone permission is reported
+  instead of playing healthy-looking silence.
 
 ## Support
 
