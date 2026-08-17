@@ -431,7 +431,7 @@ while let arg = args.popFirst() {
     case "--config": configPath = args.popFirst() ?? { usage() }()
     case "--list":
         for device in (try? allDeviceIDs()) ?? [] {
-            print("\(device)\t\(logSafe(deviceName(device) ?? "?"))\t\(deviceUID(device) ?? "?")")
+            print("\(device)\t\(logSafe(deviceName(device) ?? "?"))\t\(logSafe(deviceUID(device) ?? "?"))")
         }
         exit(0)
     default: usage()
