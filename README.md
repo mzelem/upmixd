@@ -115,7 +115,8 @@ settings either way.
   `$(brew --prefix)/var/log/upmixd.log` (brew services).
 - Uninstall: first `upmixd-panel uninstall` (while the tool still exists),
   then `brew services stop upmixd && brew uninstall upmixd`, and optionally
-  the blackhole-2ch cask.
+  the blackhole-2ch cask. Settings (`~/.config/upmixd.conf`) and logs are
+  left behind; delete them for a fully clean slate.
 - After `brew upgrade upmixd`, rerun `upmixd-panel install` to refresh the
   copied panel app.
 
