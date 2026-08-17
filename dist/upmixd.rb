@@ -42,6 +42,11 @@ class Upmixd < Formula
 
       All settings live in ~/.config/upmixd.conf, reloaded the instant
       you save.
+
+      Previously installed from source with `make install`? Run
+      `make uninstall` first — otherwise two daemons will fight over the
+      audio device. After `brew upgrade`, rerun `upmixd-panel install`
+      to refresh the panel app copy.
     EOS
   end
 

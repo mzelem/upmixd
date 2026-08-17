@@ -94,12 +94,20 @@ settings either way.
 
 - Output channel order follows the CM6206 6ch layout: FL FR FC LFE RL RR.
 - Volume keys work: BlackHole applies that gain to the loopback stream.
-- Stereo music fills all speakers via the upmix; native 5.1 content plays
-  through channel-for-channel.
+- Everything flows through the 2-channel capture: stereo music fills all
+  speakers via the upmix, and surround sources are first downmixed to stereo
+  by macOS, then upmixed. Discrete 5.1 passthrough is not supported (see
+  roadmap).
+- Previously installed from source with `make install`? Run `make uninstall`
+  (and `make uninstall-panel`) before switching to brew — the two installs
+  use different launchd labels and would run two daemons at once.
 - Logs: `~/Library/Logs/upmixd.log` (Makefile install) or
   `$(brew --prefix)/var/log/upmixd.log` (brew services).
-- Uninstall: `brew services stop upmixd && brew uninstall upmixd`,
-  `upmixd-panel uninstall`, and optionally the blackhole-2ch cask.
+- Uninstall: first `upmixd-panel uninstall` (while the tool still exists),
+  then `brew services stop upmixd && brew uninstall upmixd`, and optionally
+  the blackhole-2ch cask.
+- After `brew upgrade upmixd`, rerun `upmixd-panel install` to refresh the
+  copied panel app.
 
 ## Roadmap
 
@@ -107,6 +115,8 @@ settings either way.
   device ("Surround Speakers (upmixd)") so the Sound menu says what you'll
   actually hear — pending an Apple Developer ID.
 - Per-output-channel EQ (room correction).
+- Discrete 5.1 passthrough via an 8-channel capture device, so surround
+  sources keep their original channels instead of a downmix→upmix trip.
 
 ## License
 

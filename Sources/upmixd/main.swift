@@ -197,6 +197,14 @@ final class Supervisor {
     }
 
     private func loadConfigFromDisk() -> DaemonSettings? {
+        // A real config is a few hundred bytes; refuse pathological files
+        // rather than reading them into memory (audio must survive anything
+        // another same-user process does to this file).
+        if let size = (try? FileManager.default.attributesOfItem(atPath: configPath))?[.size]
+            as? UInt64, size > 1_000_000 {
+            print("upmixd: warning: \(configPath) is \(size) bytes; ignoring (limit 1MB)")
+            return nil
+        }
         guard let text = try? String(contentsOfFile: configPath, encoding: .utf8) else {
             return nil
         }
@@ -301,11 +309,11 @@ final class Supervisor {
             activePlaybackUID = resolvedPlaybackUID
             clearPendingActivation()
             waitingLogged = false
-            print("upmixd: \(deviceName(capture) ?? captureUID) → \(deviceName(playback) ?? "?") (5.1) @ \(Int(sampleRate))Hz")
+            print("upmixd: \(logSafe(deviceName(capture) ?? captureUID)) → \(logSafe(deviceName(playback) ?? "?")) (5.1) @ \(Int(sampleRate))Hz")
 
             if manageDefault {
                 try? setDefaultOutputDevice(capture)
-                print("upmixd: default output set to \(deviceName(capture) ?? captureUID)")
+                print("upmixd: default output set to \(logSafe(deviceName(capture) ?? captureUID))")
             }
 
             installPlaybackAliveListener(on: playback)
@@ -391,10 +399,10 @@ final class Supervisor {
         guard manageDefault, defaultOutputDevice() == capture else { return }
         guard let builtIn = findBuiltInOutputDevice(),
               (try? setDefaultOutputDevice(builtIn)) != nil else {
-            print("upmixd: warning: no built-in output to fall back to; default output is still \(deviceName(capture) ?? "the capture device")")
+            print("upmixd: warning: no built-in output to fall back to; default output is still \(logSafe(deviceName(capture) ?? "the capture device"))")
             return
         }
-        print("upmixd: default output fell back to \(deviceName(builtIn) ?? "built-in speakers")")
+        print("upmixd: default output fell back to \(logSafe(deviceName(builtIn) ?? "built-in speakers"))")
     }
 }
 
@@ -423,7 +431,7 @@ while let arg = args.popFirst() {
     case "--config": configPath = args.popFirst() ?? { usage() }()
     case "--list":
         for device in (try? allDeviceIDs()) ?? [] {
-            print("\(device)\t\(deviceName(device) ?? "?")\t\(deviceUID(device) ?? "?")")
+            print("\(device)\t\(logSafe(deviceName(device) ?? "?"))\t\(deviceUID(device) ?? "?")")
         }
         exit(0)
     default: usage()
