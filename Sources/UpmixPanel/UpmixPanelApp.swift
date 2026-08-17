@@ -27,6 +27,19 @@ struct UpmixPanelApp: App {
     }
 }
 
+/// Faceplate-style grouping bracket: a horizontal line with end ticks rising
+/// toward the sliders it spans, ⎣______⎦ opened upward.
+struct GroupBracket: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + 0.5, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX + 0.5, y: rect.maxY - 0.5))
+        path.addLine(to: CGPoint(x: rect.maxX - 0.5, y: rect.maxY - 0.5))
+        path.addLine(to: CGPoint(x: rect.maxX - 0.5, y: rect.minY))
+        return path
+    }
+}
+
 struct PanelView: View {
     @EnvironmentObject private var store: SettingsStore
 
@@ -66,16 +79,16 @@ struct PanelView: View {
     }
 
     private func groupLabel(_ name: String, columns: Int) -> some View {
-        Text(name)
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .frame(
-                width: CGFloat(columns) * columnWidth
-                    + CGFloat(columns - 1) * columnSpacing)
-            .overlay(alignment: .top) {
-                Rectangle().fill(.secondary.opacity(0.35)).frame(height: 1)
-                    .offset(y: -2)
-            }
+        let width = CGFloat(columns) * columnWidth + CGFloat(columns - 1) * columnSpacing
+        return VStack(spacing: 2) {
+            GroupBracket()
+                .stroke(.secondary.opacity(0.55), lineWidth: 1)
+                .frame(width: width - 4, height: 5)
+            Text(name)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: width)
     }
 
     var body: some View {
