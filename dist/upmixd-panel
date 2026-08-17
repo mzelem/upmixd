@@ -1,0 +1,40 @@
+#!/bin/bash
+# Installs or removes the upmixd menu-bar panel for the current user:
+# assembles ~/Applications/UpmixPanel.app from the files shipped in the
+# formula's libexec and bootstraps a login LaunchAgent. No sudo needed.
+set -euo pipefail
+
+# Resolve symlinks (Homebrew's opt/bin links are relative) to find libexec.
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+LIBEXEC="$(cd "$(dirname "$SOURCE")/../libexec" && pwd)"
+APP="$HOME/Applications/UpmixPanel.app"
+AGENT_PLIST="$HOME/Library/LaunchAgents/com.utw.upmix-panel.plist"
+
+case "${1:-}" in
+install)
+    mkdir -p "$APP/Contents/MacOS" "$HOME/Library/LaunchAgents"
+    install -m 644 "$LIBEXEC/UpmixPanel-Info.plist" "$APP/Contents/Info.plist"
+    install -m 755 "$LIBEXEC/upmix-panel" "$APP/Contents/MacOS/upmix-panel"
+    sed "s|__HOME__/Applications/UpmixPanel.app|$APP|g" \
+        "$LIBEXEC/com.utw.upmix-panel.plist" > "$AGENT_PLIST"
+    launchctl bootout "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null || true
+    sleep 1
+    launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST"
+    echo "upmixd panel installed — look for the slider icon in your menu bar"
+    ;;
+uninstall)
+    launchctl bootout "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null || true
+    rm -f "$AGENT_PLIST"
+    rm -rf "$APP"
+    echo "upmixd panel removed"
+    ;;
+*)
+    echo "usage: upmixd-panel install | uninstall" >&2
+    exit 64
+    ;;
+esac

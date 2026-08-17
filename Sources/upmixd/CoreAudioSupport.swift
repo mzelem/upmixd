@@ -52,6 +52,14 @@ func deviceUID(_ device: AudioDeviceID) -> String? {
     stringProperty(device, kAudioDevicePropertyDeviceUID)
 }
 
+/// Strip control characters before logging externally-sourced strings (USB
+/// device names come from the device's own descriptor): a hostile name must
+/// not be able to forge log lines or emit terminal escapes.
+func logSafe(_ string: String) -> String {
+    String(String.UnicodeScalarView(
+        string.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }))
+}
+
 func deviceName(_ device: AudioDeviceID) -> String? {
     stringProperty(device, kAudioObjectPropertyName)
 }

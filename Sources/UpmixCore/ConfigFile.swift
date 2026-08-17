@@ -100,7 +100,13 @@ public struct DaemonSettings: Equatable {
                 }
                 settings.eqBands.append(band)
             default:
-                warnings.append("line \(line): unknown key \"\(key)\"")
+                // Sanitize before echoing: warnings end up in logs, and the
+                // key text is arbitrary file content (control characters
+                // could forge log lines or emit terminal escapes).
+                let safeKey = String(String.UnicodeScalarView(
+                    key.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
+                )).prefix(60)
+                warnings.append("line \(line): unknown key \"\(safeKey)\"")
             }
         }
         return (settings, warnings)
