@@ -77,6 +77,8 @@ full-scale content hit a hard full-scale limiter rather than distorting
 downstream. A bad edit never takes audio down: invalid lines are logged and
 ignored.
 
+<img src="docs/panel.png" width="345" align="right" alt="upmixd menu-bar panel">
+
 The panel (`upmixd-panel install`) gives you 10 vertical sliders with
 Bass/Midrange/Treble groups, presets (Rock, Jazz, Bass Boost, …), the preamp
 control, and the surround knobs. Hand-authored config bands it can't
