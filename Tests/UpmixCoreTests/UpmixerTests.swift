@@ -152,6 +152,20 @@ final class UpmixerTests: XCTestCase {
         XCTAssertLessThanOrEqual(peak, 1.0, "LFE must not exceed full scale (would clip in the DAC)")
     }
 
+    func testOutputStaysFiniteForHugeFiniteInput() {
+        // Two huge-but-finite samples overflow their sum to infinity inside
+        // the derived channels; the outputs must still be sanitized.
+        let upmixer = Upmixer(config: UpmixConfig())
+        let n = 512
+        var left = [Float](repeating: 0.1, count: n)
+        left[9] = 3e38
+        let outs = upmix(upmixer, left: left, right: left)
+        for ch in [OutputChannel.center, .lfe, .rearLeft, .rearRight] {
+            XCTAssertTrue(outs[ch.rawValue].allSatisfy(\.isFinite),
+                          "channel \(ch) leaked non-finite samples")
+        }
+    }
+
     func testRejectsInvalidConfig() {
         // Cutoff at/above Nyquist must be rejected up front rather than
         // producing an unstable filter.
@@ -162,6 +176,11 @@ final class UpmixerTests: XCTestCase {
         XCTAssertNil(UpmixConfig(sampleRate: .infinity).validated())
         XCTAssertNil(UpmixConfig(rearDelayMs: .infinity).validated())
         XCTAssertNil(UpmixConfig(rearDelayMs: 1e300).validated())
+        // Absurd rates must fail screening: init derives delay capacity from
+        // the rate, so a "validated" 1e12 Hz config would try to allocate
+        // gigabytes (or overflow the Int conversion outright).
+        XCTAssertNil(UpmixConfig(sampleRate: 1e12, rearDelayMs: 1e-5).validated())
+        XCTAssertNotNil(UpmixConfig(sampleRate: 192_000).validated())
         XCTAssertNil(UpmixConfig(centerGain: .nan).validated())
         XCTAssertNil(UpmixConfig(lfeGain: .infinity).validated())
         XCTAssertNotNil(UpmixConfig().validated())

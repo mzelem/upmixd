@@ -139,6 +139,25 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertEqual(result.warnings.count, 20 - DaemonSettings.maxEqBands)
     }
 
+    func testAutoPreampRoundTrips() {
+        var settings = DaemonSettings()
+        settings.eqPreampDb = nil // auto
+        let parsed = DaemonSettings.parse(settings.render())
+        XCTAssertTrue(parsed.warnings.isEmpty)
+        XCTAssertNil(parsed.settings.eqPreampDb)
+        XCTAssertEqual(parsed.settings, settings)
+    }
+
+    func testDefaultQIsSingleSourced() {
+        // Slider adoption relies on exact equality between the EqBand default,
+        // the parser's fallback, and GraphicEQ's slider Q.
+        let fromInit = EqBand(freqHz: 1000, gainDb: 1).q
+        let fromParse = DaemonSettings.parse("eq_band = 1000 1").settings.eqBands[0].q
+        XCTAssertEqual(fromInit, EqBand.defaultQ)
+        XCTAssertEqual(fromParse, EqBand.defaultQ)
+        XCTAssertEqual(GraphicEQ.sliderQ, EqBand.defaultQ)
+    }
+
     func testRoundTripThroughRender() {
         var settings = DaemonSettings()
         settings.upmix.rearGain = 0.75

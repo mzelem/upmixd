@@ -109,6 +109,11 @@ final class LiveApplyTests: XCTestCase {
 
         let tooMany = (0..<17).map { EqBand(freqHz: 100 + Double($0) * 100, gainDb: 1) }
         XCTAssertFalse(eq.apply(bands: tooMany, preampDb: 0))
+        let exactlyMax = (0..<16).map { EqBand(freqHz: 100 + Double($0) * 100, gainDb: 1) }
+        XCTAssertTrue(eq.apply(bands: exactlyMax, preampDb: 0), "the cap boundary itself must be accepted")
+        // Restore the initial state (auto preamp, matching init) before the
+        // unchanged-response assertion below.
+        XCTAssertTrue(eq.apply(bands: [EqBand(freqHz: 500, gainDb: 3)], preampDb: nil))
         XCTAssertFalse(eq.apply(bands: [EqBand(freqHz: 0, gainDb: 1)], preampDb: 0))
         XCTAssertFalse(eq.apply(bands: [EqBand(freqHz: 500, gainDb: 3)], preampDb: 5))
 

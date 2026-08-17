@@ -3,7 +3,20 @@ import UpmixCore
 
 @main
 struct UpmixPanelApp: App {
-    @StateObject private var store = SettingsStore()
+    @StateObject private var store: SettingsStore
+
+    init() {
+        // Honor the same --config flag as the daemon so a relocated settings
+        // file keeps both processes on one source of truth.
+        var path = SettingsStore.defaultConfigPath
+        var args = ArraySlice(CommandLine.arguments.dropFirst())
+        while let arg = args.popFirst() {
+            if arg == "--config", let value = args.popFirst() {
+                path = value
+            }
+        }
+        _store = StateObject(wrappedValue: SettingsStore(configPath: path))
+    }
 
     var body: some Scene {
         MenuBarExtra("Upmix", systemImage: "slider.vertical.3") {
@@ -113,10 +126,11 @@ struct PanelView: View {
                     .frame(width: 38, alignment: .trailing)
             }
             Text(store.preampAuto
-                 ? "Auto guarantees no clipping; boosts lower everything else instead."
-                 : "Manual preamp keeps loudness; extreme peaks hit the safety limiter.")
+                 ? "Auto guarantees no clipping; boosts lower everything else."
+                 : "Manual preamp keeps loudness; extreme peaks hit the limiter.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             if !store.graphicEQ.customBands.isEmpty {
                 Text("+ \(store.graphicEQ.customBands.count) custom band(s) from the config file, preserved")
@@ -129,7 +143,7 @@ struct PanelView: View {
 
             surroundSlider("Rear", value: floatBinding(\.rearGain), range: 0...1,
                            display: String(format: "%.2f", store.rearGain))
-            surroundSlider("Delay", value: doubleBinding(\.rearDelayMs), range: 5...50,
+            surroundSlider("Delay", value: doubleBinding(\.rearDelayMs), range: 1...100,
                            display: String(format: "%.0f ms", store.rearDelayMs))
             surroundSlider("Center", value: floatBinding(\.centerGain), range: 0...0.5,
                            display: String(format: "%.2f", store.centerGain))

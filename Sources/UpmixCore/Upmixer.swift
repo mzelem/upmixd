@@ -29,8 +29,9 @@ public struct UpmixConfig: Equatable {
         // 0.45 keeps the low-pass overshoot (~1.09x on full-scale correlated
         // bass) under full scale: 2 * 0.45 * 1.09 ≈ 0.98.
         lfeGain: Float = 0.45,
-        // 25ms/0.9 chosen by ear on the 5.1 rig: 15ms/0.7 read as too subtle,
-        // the longer delay makes the rears register as their own presence.
+        // 25ms/0.9 chosen by ear on a real 5.1 rig: 15ms/0.7 read as too
+        // subtle; the longer delay makes the rears register as their own
+        // presence.
         rearDelayMs: Double = 25,
         rearGain: Float = 0.9
     ) {
@@ -46,7 +47,10 @@ public struct UpmixConfig: Equatable {
     /// nil otherwise (non-finite fields, cutoff at/above Nyquist,
     /// non-positive rate/delay, absurd delay length). Never traps.
     public func validated() -> UpmixConfig? {
-        guard sampleRate.isFinite, sampleRate > 0,
+        // The rate cap bounds the delay-line capacity derived from it in
+        // Upmixer.init (0.1 * rate samples); 1 MHz is far beyond any real
+        // audio hardware while keeping worst-case capacity at ~400 KB.
+        guard sampleRate.isFinite, sampleRate > 0, sampleRate <= 1_000_000,
               lfeCutoffHz.isFinite, lfeCutoffHz > 0, lfeCutoffHz < sampleRate / 2,
               centerGain.isFinite, lfeGain.isFinite, rearGain.isFinite,
               rearDelayMs.isFinite, rearDelayMs > 0
@@ -189,7 +193,12 @@ public final class Upmixer {
             let r = right[i].isFinite ? right[i] : 0
             let sum = l + r
             center[i] = config.centerGain * sum
-            lfe[i] = lfeFilter.process(config.lfeGain * sum)
+            // Two huge-but-finite samples can overflow their sum to infinity;
+            // nothing non-finite may leave this module (same discipline as
+            // the Equalizer; poisoned LFE state self-clears at buffer end).
+            if !center[i].isFinite { center[i] = 0 }
+            let lfeSample = lfeFilter.process(config.lfeGain * sum)
+            lfe[i] = lfeSample.isFinite ? lfeSample : 0
             rearL[i] = config.rearGain * rearLeftDelay.process(l)
             rearR[i] = config.rearGain * rearRightDelay.process(r)
         }

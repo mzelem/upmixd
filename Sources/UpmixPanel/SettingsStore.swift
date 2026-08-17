@@ -114,6 +114,18 @@ final class SettingsStore: ObservableObject {
     private func writeNow() {
         writeDebounce = nil
         guard fileError == nil else { return } // never write over a file we couldn't read
+        // If the file changed externally while the panel was open, re-read it
+        // as the base so the write preserves hand-edited custom bands. Knobs
+        // the panel owns (sliders, preamp, upmix values) keep the panel's
+        // values — they are the user's latest gesture.
+        if fileMtime() != lastKnownMtime,
+           let text = try? String(contentsOfFile: configPath, encoding: .utf8) {
+            let fresh = DaemonSettings.parse(text).settings
+            baseSettings = fresh
+            var merged = GraphicEQ(from: fresh)
+            merged.gainsDb = graphicEQ.gainsDb // sliders are the user's latest intent
+            graphicEQ = merged
+        }
         var settings = baseSettings
         settings.eqPreampDb = preampAuto ? nil : preampDb
         settings.upmix.rearGain = rearGain

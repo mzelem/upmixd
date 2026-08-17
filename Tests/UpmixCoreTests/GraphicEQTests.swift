@@ -118,6 +118,15 @@ final class GraphicEQTests: XCTestCase {
         XCTAssertTrue(sliderBands.allSatisfy { abs($0.gainDb) >= 5 })
     }
 
+    func testNonFiniteSliderGainsAreDropped() {
+        // NaN passes a != 0 check and Swift's min/max would clamp it to +12;
+        // a broken binding must not become a max-boost band.
+        var eq = GraphicEQ(from: DaemonSettings())
+        eq.gainsDb[2] = .nan
+        eq.gainsDb[6] = .infinity
+        XCTAssertTrue(eq.applied(to: DaemonSettings()).eqBands.isEmpty)
+    }
+
     func testSliderGainsClampToUiRange() {
         var eq = GraphicEQ(from: DaemonSettings())
         eq.gainsDb[3] = 40

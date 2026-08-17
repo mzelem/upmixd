@@ -15,9 +15,10 @@ func usage() -> Never {
         usage: upmixd [options]
 
         Reads system audio from a 2ch virtual device (BlackHole) and plays it
-        upmixed to 5.1 on a multichannel output device. Stays resident: when
-        the playback device disappears it falls the default output back to the
-        built-in speakers and reattaches the moment the device returns.
+        upmixed to 5.1 on a multichannel output device. Stays resident,
+        reattaching the moment a disappeared playback device returns; with
+        --set-default it also keeps the system default output pointed at the
+        right place through those transitions.
 
         options:
           --capture-uid <uid>    capture device UID (default: \(defaultCaptureUID))
@@ -33,7 +34,9 @@ func usage() -> Never {
           --config <path>        settings file, reloaded live on change
                                  (default: ~/.config/upmixd.conf; created with
                                  current settings if missing). File values
-                                 override flag values.
+                                 override flag values; note the panel writes
+                                 every key, so flag values persist only until
+                                 the panel's first write.
           --list                 list audio devices and exit
 
         Gain upper bounds are the no-clipping limits for full-scale input.
@@ -67,6 +70,7 @@ final class Supervisor {
     private var configDirWatcher: DispatchSourceFileSystemObject?
     private var configMissingLogged = false
     private var lastConfigMtime: Date?
+    private var lastWaitMessage: String?
 
     private var capture: AudioDeviceID = 0
     private var playback: AudioDeviceID = 0
@@ -76,7 +80,6 @@ final class Supervisor {
     private var healthTimer: DispatchSourceTimer?
     private var pendingActivation: DispatchWorkItem?
     private var pendingDeadline: DispatchTime = .distantFuture
-    private var waitingLogged = false
 
     init(
         captureUID: String, playbackUID: String?, playbackName: String,
@@ -136,8 +139,8 @@ final class Supervisor {
         if manageDefault, defaultOutputDevice() == capture {
             if playbackStillOurs {
                 try? setDefaultOutputDevice(playback) // stereo on the fronts beats silence
-            } else if let builtIn = findBuiltInOutputDevice() {
-                try? setDefaultOutputDevice(builtIn)
+            } else if let fallback = findFallbackOutputDevice(excluding: capture) {
+                try? setDefaultOutputDevice(fallback)
             }
         }
         exit(code)
@@ -181,7 +184,7 @@ final class Supervisor {
         let directory = (configPath as NSString).deletingLastPathComponent
         let fd = open(directory, O_EVTONLY)
         guard fd >= 0 else {
-            print("upmixd: warning: cannot watch \(directory); config changes apply on the 10s poll")
+            print("upmixd: warning: cannot watch \(directory); config changes apply on the 10 s poll")
             return
         }
         let source = DispatchSource.makeFileSystemObjectSource(
@@ -308,7 +311,7 @@ final class Supervisor {
             engine = newEngine
             activePlaybackUID = resolvedPlaybackUID
             clearPendingActivation()
-            waitingLogged = false
+            lastWaitMessage = nil
             print("upmixd: \(logSafe(deviceName(capture) ?? captureUID)) → \(logSafe(deviceName(playback) ?? "?")) (5.1) @ \(Int(sampleRate))Hz")
 
             if manageDefault {
@@ -319,9 +322,12 @@ final class Supervisor {
             installPlaybackAliveListener(on: playback)
             startHealthTimer(for: newEngine)
         } catch {
-            if !waitingLogged {
-                print("upmixd: waiting for devices (\(error))")
-                waitingLogged = true
+            // Log once per distinct failure, so a changed diagnosis (device
+            // missing → format won't settle) still reaches the log.
+            let message = "upmixd: waiting for devices (\(error))"
+            if message != lastWaitMessage {
+                print(message)
+                lastWaitMessage = message
             }
             // Backstop in case no device-list notification ever fires again
             // (e.g. the failure wasn't a missing device).
@@ -397,12 +403,12 @@ final class Supervisor {
     /// manages the default — a manually configured default is not ours to move.
     private func fallBackDefaultOutput() {
         guard manageDefault, defaultOutputDevice() == capture else { return }
-        guard let builtIn = findBuiltInOutputDevice(),
-              (try? setDefaultOutputDevice(builtIn)) != nil else {
+        guard let fallback = findFallbackOutputDevice(excluding: capture),
+              (try? setDefaultOutputDevice(fallback)) != nil else {
             print("upmixd: warning: no built-in output to fall back to; default output is still \(logSafe(deviceName(capture) ?? "the capture device"))")
             return
         }
-        print("upmixd: default output fell back to \(logSafe(deviceName(builtIn) ?? "built-in speakers"))")
+        print("upmixd: default output fell back to \(logSafe(deviceName(fallback) ?? "built-in speakers"))")
     }
 }
 

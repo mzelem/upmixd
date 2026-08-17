@@ -8,7 +8,7 @@ public struct GraphicEQ: Equatable {
     public static let standardFrequencies: [Double] =
         [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
     public static let maxSliderDb: Float = 12
-    static let sliderQ = 1.41
+    static let sliderQ = EqBand.defaultQ
 
     /// One gain per standard frequency, in dB.
     public var gainsDb: [Float]
@@ -39,7 +39,9 @@ public struct GraphicEQ: Equatable {
     /// non-EQ-band settings pass through untouched.
     public func applied(to base: DaemonSettings) -> DaemonSettings {
         var sliderBands: [EqBand] = []
-        for (slot, gain) in gainsDb.enumerated() where gain != 0 {
+        // Non-finite guard: NaN passes `!= 0` and Swift's min/max would turn
+        // it into a +12 dB band; a broken binding must not become max boost.
+        for (slot, gain) in gainsDb.enumerated() where gain != 0 && gain.isFinite {
             let clamped = max(-Self.maxSliderDb, min(Self.maxSliderDb, gain))
             sliderBands.append(
                 EqBand(freqHz: Self.standardFrequencies[slot], gainDb: clamped))

@@ -7,9 +7,18 @@ enum CoreAudioError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case let .osStatus(what, status): return "\(what) failed (OSStatus \(status))"
+        case let .osStatus(what, status):
+            return "\(what) failed (OSStatus \(status)\(fourCC(status)))"
         case let .notFound(what): return "\(what) not found"
         }
+    }
+
+    /// CoreAudio statuses are usually four printable ASCII bytes ('nope',
+    /// 'what' …); rendering them makes user bug reports actionable.
+    private func fourCC(_ status: OSStatus) -> String {
+        let bytes = withUnsafeBytes(of: status.bigEndian) { Array($0) }
+        guard bytes.allSatisfy({ $0 >= 0x20 && $0 < 0x7F }) else { return "" }
+        return " '\(String(bytes: bytes, encoding: .ascii)!)'"
     }
 }
 
@@ -166,16 +175,39 @@ func isDeviceAlive(_ device: AudioDeviceID) -> Bool {
     return alive != 0
 }
 
+func transportType(_ device: AudioDeviceID) -> UInt32? {
+    var addr = address(kAudioDevicePropertyTransportType)
+    var transport: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &transport) == noErr else {
+        return nil
+    }
+    return transport
+}
+
 /// Built-in output found by transport type, not by UID: the speaker UID
 /// differs across Mac generations ("BuiltInSpeakerDevice" vs AppleHDA forms).
 func findBuiltInOutputDevice() -> AudioDeviceID? {
     guard let devices = try? allDeviceIDs() else { return nil }
     for device in devices {
-        var addr = address(kAudioDevicePropertyTransportType)
-        var transport: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &transport) == noErr,
-              transport == kAudioDeviceTransportTypeBuiltIn,
+        guard transportType(device) == kAudioDeviceTransportTypeBuiltIn,
+              let streams = try? outputStreams(device), !streams.isEmpty
+        else { continue }
+        return device
+    }
+    return nil
+}
+
+/// Somewhere audible to point the default output when we let go of it:
+/// built-in speakers if the Mac has them, otherwise the first real
+/// (non-virtual) output device — covers Mac minis/Studios on HDMI or
+/// DisplayPort monitors. Virtual devices are skipped so the fallback can
+/// never land on another loopback and stay silent.
+func findFallbackOutputDevice(excluding: AudioDeviceID) -> AudioDeviceID? {
+    if let builtIn = findBuiltInOutputDevice() { return builtIn }
+    guard let devices = try? allDeviceIDs() else { return nil }
+    for device in devices where device != excluding {
+        guard transportType(device) != kAudioDeviceTransportTypeVirtual,
               let streams = try? outputStreams(device), !streams.isEmpty
         else { continue }
         return device
