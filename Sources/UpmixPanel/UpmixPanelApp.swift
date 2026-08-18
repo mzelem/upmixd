@@ -91,8 +91,33 @@ struct PanelView: View {
         .frame(width: width)
     }
 
+    private var outputPicker: some View {
+        let resolved = store.resolvedOutput
+        let isAuto = store.outputName == nil && store.outputUid == nil
+        let title = isAuto
+            ? "Auto\(resolved.candidate.map { " (\($0.name))" } ?? "")"
+            : (store.outputName ?? store.outputUid ?? "?")
+        return HStack {
+            Text("Output").font(.headline)
+            Spacer()
+            Menu(title) {
+                Button("Automatic") { store.selectOutput(nil) }
+                Divider()
+                ForEach(store.outputChoices(), id: \.uid) { choice in
+                    Button("\(choice.name) (\(choice.maxOutputChannels)ch)") {
+                        store.selectOutput(choice)
+                    }
+                }
+            }
+            .controlSize(.small)
+            .fixedSize()
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            outputPicker
+            Divider()
             HStack {
                 Text("Equalizer").font(.headline)
                 Spacer()
@@ -151,17 +176,24 @@ struct PanelView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Divider()
-            Text("Surround").font(.headline)
+            if store.resolvedOutput.surround {
+                Divider()
+                Text("Surround").font(.headline)
 
-            surroundSlider("Rear", value: floatBinding(\.rearGain), range: 0...1,
-                           display: String(format: "%.2f", store.rearGain))
-            surroundSlider("Delay", value: doubleBinding(\.rearDelayMs), range: 1...100,
-                           display: String(format: "%.0f ms", store.rearDelayMs))
-            surroundSlider("Center", value: floatBinding(\.centerGain), range: 0...0.5,
-                           display: String(format: "%.2f", store.centerGain))
-            surroundSlider("Sub", value: floatBinding(\.lfeGain), range: 0...0.45,
-                           display: String(format: "%.2f", store.lfeGain))
+                surroundSlider("Rear", value: floatBinding(\.rearGain), range: 0...1,
+                               display: String(format: "%.2f", store.rearGain))
+                surroundSlider("Delay", value: doubleBinding(\.rearDelayMs), range: 1...100,
+                               display: String(format: "%.0f ms", store.rearDelayMs))
+                surroundSlider("Center", value: floatBinding(\.centerGain), range: 0...0.5,
+                               display: String(format: "%.2f", store.centerGain))
+                surroundSlider("Sub", value: floatBinding(\.lfeGain), range: 0...0.45,
+                               display: String(format: "%.2f", store.lfeGain))
+            } else {
+                Text("Stereo output — EQ only; surround controls apply when a 5.1-capable device is selected.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Divider()
             HStack {
