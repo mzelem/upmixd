@@ -1,11 +1,12 @@
 import CoreAudio
 import Foundation
+import UpmixCore
 
-enum CoreAudioError: Error, CustomStringConvertible {
+public enum CoreAudioError: Error, CustomStringConvertible {
     case osStatus(String, OSStatus)
     case notFound(String)
 
-    var description: String {
+    public var description: String {
         switch self {
         case let .osStatus(what, status):
             return "\(what) failed (OSStatus \(status)\(fourCC(status)))"
@@ -22,7 +23,7 @@ enum CoreAudioError: Error, CustomStringConvertible {
     }
 }
 
-func check(_ status: OSStatus, _ what: String) throws {
+public func check(_ status: OSStatus, _ what: String) throws {
     guard status == noErr else { throw CoreAudioError.osStatus(what, status) }
 }
 
@@ -34,7 +35,7 @@ private func address(
         mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
 }
 
-func allDeviceIDs() throws -> [AudioDeviceID] {
+public func allDeviceIDs() throws -> [AudioDeviceID] {
     var addr = address(kAudioHardwarePropertyDevices)
     var size: UInt32 = 0
     try check(
@@ -47,7 +48,7 @@ func allDeviceIDs() throws -> [AudioDeviceID] {
     return devices
 }
 
-func stringProperty(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
+public func stringProperty(_ device: AudioObjectID, _ selector: AudioObjectPropertySelector) -> String? {
     var addr = address(selector)
     var str: CFString = "" as CFString
     var size = UInt32(MemoryLayout<CFString>.size)
@@ -57,23 +58,23 @@ func stringProperty(_ device: AudioObjectID, _ selector: AudioObjectPropertySele
     return status == noErr ? (str as String) : nil
 }
 
-func deviceUID(_ device: AudioDeviceID) -> String? {
+public func deviceUID(_ device: AudioDeviceID) -> String? {
     stringProperty(device, kAudioDevicePropertyDeviceUID)
 }
 
 /// Strip control characters before logging externally-sourced strings (USB
 /// device names come from the device's own descriptor): a hostile name must
 /// not be able to forge log lines or emit terminal escapes.
-func logSafe(_ string: String) -> String {
+public func logSafe(_ string: String) -> String {
     String(String.UnicodeScalarView(
         string.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }))
 }
 
-func deviceName(_ device: AudioDeviceID) -> String? {
+public func deviceName(_ device: AudioDeviceID) -> String? {
     stringProperty(device, kAudioObjectPropertyName)
 }
 
-func findDevice(uid: String) throws -> AudioDeviceID {
+public func findDevice(uid: String) throws -> AudioDeviceID {
     for device in try allDeviceIDs() where deviceUID(device) == uid {
         return device
     }
@@ -82,7 +83,7 @@ func findDevice(uid: String) throws -> AudioDeviceID {
 
 /// Find a device by name that actually has output streams (devices like the
 /// CM6206 enumerate their output and input sides under the same name).
-func findPlaybackDevice(name: String) throws -> AudioDeviceID {
+public func findPlaybackDevice(name: String) throws -> AudioDeviceID {
     for device in try allDeviceIDs() where deviceName(device) == name {
         if let streams = try? outputStreams(device), !streams.isEmpty {
             return device
@@ -91,7 +92,7 @@ func findPlaybackDevice(name: String) throws -> AudioDeviceID {
     throw CoreAudioError.notFound("playback device named \"\(name)\"")
 }
 
-func outputStreams(_ device: AudioDeviceID) throws -> [AudioStreamID] {
+public func outputStreams(_ device: AudioDeviceID) throws -> [AudioStreamID] {
     var addr = address(kAudioDevicePropertyStreams, scope: kAudioDevicePropertyScopeOutput)
     var size: UInt32 = 0
     try check(AudioObjectGetPropertyDataSize(device, &addr, 0, nil, &size), "get output stream list size")
@@ -100,7 +101,7 @@ func outputStreams(_ device: AudioDeviceID) throws -> [AudioStreamID] {
     return streams
 }
 
-func setNominalSampleRate(_ device: AudioDeviceID, _ rate: Double) throws {
+public func setNominalSampleRate(_ device: AudioDeviceID, _ rate: Double) throws {
     var addr = address(kAudioDevicePropertyNominalSampleRate)
     var value = rate
     try check(
@@ -110,7 +111,7 @@ func setNominalSampleRate(_ device: AudioDeviceID, _ rate: Double) throws {
 
 /// Ensure the device's first output stream runs the given physical format,
 /// picking it from the stream's advertised formats.
-func ensurePhysicalFormat(
+public func ensurePhysicalFormat(
     device: AudioDeviceID, channels: UInt32, bits: UInt32, sampleRate: Double
 ) throws {
     guard let stream = try outputStreams(device).first else {
@@ -154,7 +155,7 @@ func ensurePhysicalFormat(
         "set physical format")
 }
 
-func currentOutputChannels(_ device: AudioDeviceID) -> UInt32? {
+public func currentOutputChannels(_ device: AudioDeviceID) -> UInt32? {
     guard let stream = try? outputStreams(device).first else { return nil }
     var addr = address(kAudioStreamPropertyPhysicalFormat)
     var format = AudioStreamBasicDescription()
@@ -165,7 +166,7 @@ func currentOutputChannels(_ device: AudioDeviceID) -> UInt32? {
     return format.mChannelsPerFrame
 }
 
-func isDeviceAlive(_ device: AudioDeviceID) -> Bool {
+public func isDeviceAlive(_ device: AudioDeviceID) -> Bool {
     var addr = address(kAudioDevicePropertyDeviceIsAlive)
     var alive: UInt32 = 0
     var size = UInt32(MemoryLayout<UInt32>.size)
@@ -175,7 +176,7 @@ func isDeviceAlive(_ device: AudioDeviceID) -> Bool {
     return alive != 0
 }
 
-func transportType(_ device: AudioDeviceID) -> UInt32? {
+public func transportType(_ device: AudioDeviceID) -> UInt32? {
     var addr = address(kAudioDevicePropertyTransportType)
     var transport: UInt32 = 0
     var size = UInt32(MemoryLayout<UInt32>.size)
@@ -187,7 +188,7 @@ func transportType(_ device: AudioDeviceID) -> UInt32? {
 
 /// Built-in output found by transport type, not by UID: the speaker UID
 /// differs across Mac generations ("BuiltInSpeakerDevice" vs AppleHDA forms).
-func findBuiltInOutputDevice() -> AudioDeviceID? {
+public func findBuiltInOutputDevice() -> AudioDeviceID? {
     guard let devices = try? allDeviceIDs() else { return nil }
     for device in devices {
         guard transportType(device) == kAudioDeviceTransportTypeBuiltIn,
@@ -203,7 +204,7 @@ func findBuiltInOutputDevice() -> AudioDeviceID? {
 /// (non-virtual) output device — covers Mac minis/Studios on HDMI or
 /// DisplayPort monitors. Virtual devices are skipped so the fallback can
 /// never land on another loopback and stay silent.
-func findFallbackOutputDevice(excluding: AudioDeviceID) -> AudioDeviceID? {
+public func findFallbackOutputDevice(excluding: AudioDeviceID) -> AudioDeviceID? {
     if let builtIn = findBuiltInOutputDevice() { return builtIn }
     guard let devices = try? allDeviceIDs() else { return nil }
     for device in devices where device != excluding {
@@ -215,7 +216,7 @@ func findFallbackOutputDevice(excluding: AudioDeviceID) -> AudioDeviceID? {
     return nil
 }
 
-func defaultOutputDevice() -> AudioDeviceID? {
+public func defaultOutputDevice() -> AudioDeviceID? {
     var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
     var device = AudioDeviceID(0)
     var size = UInt32(MemoryLayout<AudioDeviceID>.size)
@@ -225,7 +226,7 @@ func defaultOutputDevice() -> AudioDeviceID? {
     return device
 }
 
-func setDefaultOutputDevice(_ device: AudioDeviceID) throws {
+public func setDefaultOutputDevice(_ device: AudioDeviceID) throws {
     var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
     var value = device
     try check(
@@ -238,7 +239,7 @@ func setDefaultOutputDevice(_ device: AudioDeviceID) throws {
 /// Create a private (invisible in UI) aggregate of the capture and playback
 /// devices. The playback device is the clock master; the capture side gets
 /// drift compensation.
-func createAggregate(captureUID: String, playbackUID: String) throws -> AudioDeviceID {
+public func createAggregate(captureUID: String, playbackUID: String) throws -> AudioDeviceID {
     let description: [String: Any] = [
         kAudioAggregateDeviceUIDKey: "com.utw.upmixd.aggregate",
         kAudioAggregateDeviceNameKey: "upmixd aggregate",
@@ -261,6 +262,54 @@ func createAggregate(captureUID: String, playbackUID: String) throws -> AudioDev
     return aggregate
 }
 
-func destroyAggregate(_ device: AudioDeviceID) {
+public func destroyAggregate(_ device: AudioDeviceID) {
     _ = AudioHardwareDestroyAggregateDevice(device)
+}
+
+// MARK: - Candidate enumeration for the selection policy
+
+/// Upper bound on a device's output channel capability: the sum over its
+/// output streams of each stream's widest available physical format. Uses
+/// capability, not the currently-selected format — a surround adapter parked
+/// on its stereo alt setting still ranks as surround.
+public func maxOutputChannels(_ device: AudioDeviceID) -> Int {
+    guard let streams = try? outputStreams(device) else { return 0 }
+    var total = 0
+    for stream in streams {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioStreamPropertyAvailablePhysicalFormats,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(stream, &addr, 0, nil, &size) == noErr else { continue }
+        var formats = [AudioStreamRangedDescription](
+            repeating: AudioStreamRangedDescription(),
+            count: Int(size) / MemoryLayout<AudioStreamRangedDescription>.size)
+        guard AudioObjectGetPropertyData(stream, &addr, 0, nil, &size, &formats) == noErr else { continue }
+        total += Int(formats.map { $0.mFormat.mChannelsPerFrame }.max() ?? 0)
+    }
+    return total
+}
+
+/// Snapshot of every output-capable device as policy candidates. Virtual
+/// devices and the capture are included WITH their flags set — filtering is
+/// the policy's job, and the panel wants the full picture too.
+public func listOutputCandidates(captureUID: String) -> [OutputCandidate] {
+    guard let devices = try? allDeviceIDs() else { return [] }
+    let currentDefault = defaultOutputDevice()
+    var candidates: [OutputCandidate] = []
+    for device in devices {
+        guard let streams = try? outputStreams(device), !streams.isEmpty,
+              let uid = deviceUID(device)
+        else { continue }
+        let transport = transportType(device)
+        candidates.append(OutputCandidate(
+            uid: uid,
+            name: deviceName(device) ?? uid,
+            maxOutputChannels: maxOutputChannels(device),
+            isCurrentDefault: device == currentDefault,
+            isVirtual: transport == kAudioDeviceTransportTypeVirtual
+                || transport == kAudioDeviceTransportTypeAggregate))
+    }
+    return candidates
 }

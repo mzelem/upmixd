@@ -1,6 +1,7 @@
 import CoreAudio
 import Foundation
 import UpmixCore
+import UpmixDevices
 
 enum RenderHealth: Int32 {
     case unknown = 0

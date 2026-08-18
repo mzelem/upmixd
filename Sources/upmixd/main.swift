@@ -1,6 +1,7 @@
 import CoreAudio
 import Foundation
 import UpmixCore
+import UpmixDevices
 
 setvbuf(stdout, nil, _IOLBF, 0) // line-buffer logs under launchd
 
