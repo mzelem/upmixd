@@ -1,0 +1,98 @@
+import XCTest
+@testable import UpmixCore
+
+final class OutputSelectionTests: XCTestCase {
+    private func candidate(
+        uid: String, name: String, channels: Int,
+        isCurrentDefault: Bool = false, isVirtual: Bool = false
+    ) -> OutputCandidate {
+        OutputCandidate(
+            uid: uid, name: name, maxOutputChannels: channels,
+            isCurrentDefault: isCurrentDefault, isVirtual: isVirtual)
+    }
+
+    func testAutoPicksMostChannels() {
+        let chosen = chooseOutput(
+            candidates: [
+                candidate(uid: "hdmi", name: "Monitor", channels: 2),
+                candidate(uid: "usb", name: "USB Sound Device", channels: 8),
+                candidate(uid: "builtin", name: "MacBook Pro Speakers", channels: 2),
+            ],
+            selection: .automatic, captureUID: "BlackHole2ch_UID")
+        XCTAssertEqual(chosen?.uid, "usb")
+    }
+
+    func testAutoExcludesVirtualAndCapture() {
+        let chosen = chooseOutput(
+            candidates: [
+                candidate(uid: "BlackHole2ch_UID", name: "BlackHole 2ch", channels: 2),
+                candidate(uid: "bh16", name: "BlackHole 16ch", channels: 16, isVirtual: true),
+                candidate(uid: "teams", name: "Teams Audio", channels: 2, isVirtual: true),
+                candidate(uid: "builtin", name: "MacBook Pro Speakers", channels: 2),
+            ],
+            selection: .automatic, captureUID: "BlackHole2ch_UID")
+        XCTAssertEqual(chosen?.uid, "builtin",
+                       "virtual devices and the capture device must never be chosen")
+    }
+
+    func testAutoTieBreaksTowardCurrentDefault() {
+        let chosen = chooseOutput(
+            candidates: [
+                candidate(uid: "hdmi", name: "Monitor", channels: 2),
+                candidate(uid: "dac", name: "Nice DAC", channels: 2, isCurrentDefault: true),
+            ],
+            selection: .automatic, captureUID: "cap")
+        XCTAssertEqual(chosen?.uid, "dac")
+    }
+
+    func testAutoTieBreakIsDeterministicWithoutDefault() {
+        let candidates = [
+            candidate(uid: "b", name: "Bravo", channels: 2),
+            candidate(uid: "a", name: "Alpha", channels: 2),
+        ]
+        XCTAssertEqual(
+            chooseOutput(candidates: candidates, selection: .automatic, captureUID: "cap")?.uid,
+            chooseOutput(candidates: candidates.reversed(), selection: .automatic, captureUID: "cap")?.uid,
+            "same set must choose the same device regardless of enumeration order")
+    }
+
+    func testExplicitUidWinsOverName() {
+        let chosen = chooseOutput(
+            candidates: [
+                candidate(uid: "u1", name: "Duplicate", channels: 2),
+                candidate(uid: "u2", name: "Duplicate", channels: 6),
+            ],
+            selection: .explicit(uid: "u1", name: "Duplicate"), captureUID: "cap")
+        XCTAssertEqual(chosen?.uid, "u1")
+    }
+
+    func testExplicitFallsBackToNameWhenUidGone() {
+        // USB UIDs embed the port location, so a replug changes the UID but
+        // keeps the name — name match must rescue the selection.
+        let chosen = chooseOutput(
+            candidates: [candidate(uid: "newport", name: "USB Sound Device", channels: 8)],
+            selection: .explicit(uid: "oldport", name: "USB Sound Device"), captureUID: "cap")
+        XCTAssertEqual(chosen?.uid, "newport")
+    }
+
+    func testExplicitMissingDeviceReturnsNilNotAuto() {
+        let chosen = chooseOutput(
+            candidates: [candidate(uid: "builtin", name: "MacBook Pro Speakers", channels: 2)],
+            selection: .explicit(uid: "gone", name: "Gone Device"), captureUID: "cap")
+        XCTAssertNil(chosen, "an explicit selection must wait for its device, not silently switch")
+    }
+
+    func testAutoReturnsNilWhenOnlyVirtualDevicesExist() {
+        let chosen = chooseOutput(
+            candidates: [candidate(uid: "bh", name: "BlackHole 2ch", channels: 2, isVirtual: true)],
+            selection: .automatic, captureUID: "cap")
+        XCTAssertNil(chosen)
+    }
+
+    func testPipelineChannelsForDevice() {
+        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 8), 6, "8ch devices run 5.1 for now")
+        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 6), 6)
+        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 4), 2, "no 4ch mode; EQ-only stereo")
+        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 2), 2)
+    }
+}
