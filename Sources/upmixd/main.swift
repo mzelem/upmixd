@@ -78,6 +78,7 @@ final class Supervisor {
     private var activePlaybackUID: String?
     private var activeChannels = 0
     private var savedPlaybackVolume: Float?
+    private var savedVolumeOwnerUID: String?
     private var playbackAliveBlock: AudioObjectPropertyListenerBlock?
     private var engine: Engine?
     private var healthTimer: DispatchSourceTimer?
@@ -152,6 +153,23 @@ final class Supervisor {
             print("upmixd: switching output to \(logSafe(best.name))")
             self.teardownEngine()
             self.activate()
+            if self.engine == nil {
+                // The upgrade attempt failed; don't leave the default parked
+                // on a consumer-less BlackHole while the retry loop runs.
+                self.fallBackDefaultOutput()
+            }
+        }
+    }
+
+    /// Restore the commandeered device volume — only onto the device it was
+    /// saved from (CoreAudio can reuse AudioDeviceIDs after a replug).
+    private func restoreSavedVolume() {
+        if let saved = savedPlaybackVolume {
+            if isDeviceAlive(playback), deviceUID(playback) == savedVolumeOwnerUID {
+                setOutputVolume(playback, saved)
+            }
+            savedPlaybackVolume = nil
+            savedVolumeOwnerUID = nil
         }
     }
 
@@ -274,9 +292,23 @@ final class Supervisor {
         currentSettings = loaded
         print("upmixd: config reloaded")
         if selectionChanged, engine != nil {
+            // Skip the audible teardown gap when the new selection resolves
+            // to the device we're already attached to in the same mode
+            // (e.g. explicitly picking what automatic had chosen).
+            let resolved = chooseOutput(
+                candidates: listOutputCandidates(captureUID: captureUID),
+                selection: loaded.outputSelection, captureUID: captureUID)
+            if resolved?.uid == activePlaybackUID,
+               resolved?.pipelineChannels == activeChannels {
+                engine?.submit(loaded)
+                return
+            }
             print("upmixd: output selection changed; reattaching")
             teardownEngine()
             activate()
+            if engine == nil {
+                fallBackDefaultOutput()
+            }
         } else if selectionChanged {
             // Waiting state: retry immediately with the new selection rather
             // than making the user sit out the backstop interval.
@@ -365,17 +397,25 @@ final class Supervisor {
             } else {
                 // Stereo passthrough: nudge the device toward the pipeline
                 // rate but respect whatever it actually runs — the DSP is
-                // built for the real rate below.
+                // built for the real rate below. Any 2ch LPCM format works
+                // (the IOProc's virtual format is Float32 regardless).
                 try? setNominalSampleRate(playback, sampleRate)
-                if currentOutputChannels(playback) != 2,
-                   hasPhysicalFormat(device: playback, channels: 2, bits: 16, sampleRate: sampleRate) {
-                    try? ensurePhysicalFormat(
-                        device: playback, channels: 2, bits: 16, sampleRate: sampleRate)
+                if !ensureStereoFormat(device: playback, preferredRate: sampleRate) {
+                    throw CoreAudioError.notFound("a 2-channel format on \(logSafe(chosen.name))")
                 }
             }
-            let engineRate = channels == 6
-                ? sampleRate
-                : (deviceNominalSampleRate(playback) ?? sampleRate)
+            var engineRate = sampleRate
+            if channels == 2 {
+                // The rate nudge is asynchronous; wait briefly for it to
+                // settle so the EQ isn't built for a stale rate.
+                let rateDeadline = Date(timeIntervalSinceNow: 1)
+                var rate = deviceNominalSampleRate(playback) ?? sampleRate
+                while rate != sampleRate && Date() < rateDeadline {
+                    usleep(100_000)
+                    rate = deviceNominalSampleRate(playback) ?? sampleRate
+                }
+                engineRate = rate
+            }
 
             // The device's own volume is the last hop; own it while attached
             // (loudness control lives upstream in the volume keys/BlackHole)
@@ -383,6 +423,7 @@ final class Supervisor {
             // mysteriously quiet.
             if let deviceVolume = outputVolume(playback), deviceVolume < 1.0 {
                 savedPlaybackVolume = deviceVolume
+                savedVolumeOwnerUID = resolvedPlaybackUID
                 setOutputVolume(playback, 1.0)
             }
 
@@ -407,15 +448,9 @@ final class Supervisor {
             installPlaybackAliveListener(on: playback)
             startHealthTimer(for: newEngine)
         } catch {
-            // A failed start must not strand the commandeered volume: restore
-            // it here (teardownEngine never runs on this path), or the saved
-            // value could later be applied to a different device.
-            if let saved = savedPlaybackVolume {
-                if isDeviceAlive(playback) {
-                    setOutputVolume(playback, saved)
-                }
-                savedPlaybackVolume = nil
-            }
+            // A failed start must not strand the commandeered volume
+            // (teardownEngine never runs on this path).
+            restoreSavedVolume()
             // Log once per distinct failure, so a changed diagnosis (device
             // missing → format won't settle) still reaches the log.
             let message = "upmixd: waiting for devices (\(error))"
@@ -490,14 +525,7 @@ final class Supervisor {
         }
         engine?.stop()
         engine = nil
-        // Give the device its volume back so direct listening isn't suddenly
-        // at 100% (skip if it vanished — nothing to restore to).
-        if let saved = savedPlaybackVolume {
-            if isDeviceAlive(playback) {
-                setOutputVolume(playback, saved)
-            }
-            savedPlaybackVolume = nil
-        }
+        restoreSavedVolume()
     }
 
     /// Audio routed to BlackHole with no consumer is silence; put the default

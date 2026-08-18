@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UpmixCore
 
@@ -6,6 +7,15 @@ struct UpmixPanelApp: App {
     @StateObject private var store: SettingsStore
 
     init() {
+        // Single instance: the login agent may already be running when the
+        // user double-clicks the app — a second menu-bar icon writing the
+        // same config is pure confusion.
+        let mine = Bundle.main.bundleIdentifier
+        if let mine,
+           NSRunningApplication.runningApplications(withBundleIdentifier: mine)
+               .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            exit(0)
+        }
         // Honor the same --config flag as the daemon so a relocated settings
         // file keeps both processes on one source of truth.
         var path = SettingsStore.defaultConfigPath
@@ -103,7 +113,10 @@ struct PanelView: View {
                 Button("Automatic") { store.selectOutput(nil) }
                 Divider()
                 ForEach(store.outputChoices(), id: \.uid) { choice in
-                    Button("\(choice.name) (\(choice.maxOutputChannels)ch)") {
+                    // Label with what the pipeline will actually DO there,
+                    // not raw capability (an 8ch sink without our format
+                    // runs stereo and must say so).
+                    Button("\(choice.name) (\(choice.pipelineChannels == 6 ? "5.1" : "stereo"))") {
                         store.selectOutput(choice)
                     }
                 }

@@ -101,6 +101,11 @@ public struct DaemonSettings: Equatable {
                     warnings.append("line \(line): output_device requires a device name or auto")
                 } else {
                     settings.outputName = value.replacingOccurrences(of: "\\#", with: "#")
+                    // A name line is authoritative: clear any earlier uid so a
+                    // hand-edited name isn't silently overridden by a stale
+                    // uid (the panel always writes the uid line after this
+                    // one, so panel-written pairs are unaffected).
+                    settings.outputUid = nil
                 }
             case "output_device_uid":
                 if value.isEmpty {
@@ -162,8 +167,12 @@ public struct DaemonSettings: Equatable {
             "# upmixd configuration — edited live; the daemon reloads on save",
             "",
             "# output_device = auto picks the most capable real device",
-            "output_device = \(outputName.map(configValue) ?? "auto")",
         ]
+        // A uid-only selection (e.g. --playback-uid with no name) must not
+        // emit the misleading "output_device = auto" line.
+        if outputName != nil || outputUid == nil {
+            lines.append("output_device = \(outputName.map(configValue) ?? "auto")")
+        }
         if let outputUid {
             lines.append("output_device_uid = \(configValue(outputUid))")
         }

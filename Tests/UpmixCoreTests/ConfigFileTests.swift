@@ -189,6 +189,24 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertTrue(parsed.settings.outputName?.contains("\n") != true)
     }
 
+    func testNameLineClearsStaleUid() {
+        // Hand-editing the name must win over a leftover uid line above it.
+        var stale = DaemonSettings()
+        stale.outputUid = "old-uid"
+        let parsed = DaemonSettings.parse("output_device = Device B", defaults: stale)
+        XCTAssertEqual(parsed.settings.outputSelection, .explicit(uid: nil, name: "Device B"))
+    }
+
+    func testUidOnlySelectionRendersWithoutAutoLine() {
+        var settings = DaemonSettings()
+        settings.outputUid = "some-uid"
+        let text = settings.render()
+        XCTAssertFalse(text.split(separator: "\n").contains("output_device = auto"),
+                       "uid-only selection must not claim to be automatic")
+        let parsed = DaemonSettings.parse(text)
+        XCTAssertEqual(parsed.settings, settings)
+    }
+
     func testOutputDeviceRoundTrips() {
         var settings = DaemonSettings()
         settings.outputName = "USB Sound Device"
