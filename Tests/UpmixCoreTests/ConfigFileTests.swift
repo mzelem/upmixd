@@ -139,6 +139,48 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertEqual(result.warnings.count, 20 - DaemonSettings.maxEqBands)
     }
 
+    func testOutputDeviceDefaultsToAutomatic() {
+        XCTAssertEqual(DaemonSettings().outputSelection, .automatic)
+        XCTAssertEqual(DaemonSettings.parse("").settings.outputSelection, .automatic)
+    }
+
+    func testOutputDeviceParsesNameAndUid() {
+        let byName = DaemonSettings.parse("output_device = Nice DAC")
+        XCTAssertTrue(byName.warnings.isEmpty)
+        XCTAssertEqual(byName.settings.outputSelection, .explicit(uid: nil, name: "Nice DAC"))
+
+        let both = DaemonSettings.parse("""
+        output_device = USB Sound Device
+        output_device_uid = AppleUSBAudioEngine:X:1
+        """)
+        XCTAssertTrue(both.warnings.isEmpty)
+        XCTAssertEqual(
+            both.settings.outputSelection,
+            .explicit(uid: "AppleUSBAudioEngine:X:1", name: "USB Sound Device"))
+    }
+
+    func testOutputDeviceAutoKeywordResets() {
+        var settings = DaemonSettings()
+        settings.outputName = "Old"
+        settings.outputUid = "old-uid"
+        let parsed = DaemonSettings.parse("output_device = auto", defaults: settings)
+        XCTAssertEqual(parsed.settings.outputSelection, .automatic)
+        XCTAssertNil(parsed.settings.outputUid, "auto must clear a stale uid too")
+    }
+
+    func testOutputDeviceRoundTrips() {
+        var settings = DaemonSettings()
+        settings.outputName = "USB Sound Device"
+        settings.outputUid = "AppleUSBAudioEngine:X:1"
+        var result = DaemonSettings.parse(settings.render())
+        XCTAssertTrue(result.warnings.isEmpty)
+        XCTAssertEqual(result.settings, settings)
+
+        result = DaemonSettings.parse(DaemonSettings().render())
+        XCTAssertTrue(result.warnings.isEmpty)
+        XCTAssertEqual(result.settings.outputSelection, .automatic)
+    }
+
     func testAutoPreampRoundTrips() {
         var settings = DaemonSettings()
         settings.eqPreampDb = nil // auto

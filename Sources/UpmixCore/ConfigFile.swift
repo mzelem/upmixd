@@ -17,6 +17,17 @@ public struct DaemonSettings: Equatable {
     /// the way auto's re-measurement does.
     public var eqPreampDb: Float? = -6
 
+    /// Output device selection. Both nil = automatic (most capable real
+    /// device). The name is the primary key (USB UIDs change with the port);
+    /// the uid disambiguates same-name devices.
+    public var outputName: String?
+    public var outputUid: String?
+
+    public var outputSelection: OutputSelection {
+        if outputName == nil && outputUid == nil { return .automatic }
+        return .explicit(uid: outputUid, name: outputName)
+    }
+
     public init() {}
 
     /// Forgiving line-based parse: `#` comments, blank lines, `key = value`.
@@ -74,6 +85,21 @@ public struct DaemonSettings: Equatable {
                 if let v = scalar(value, key, min: 0, max: 0.45, line: line) {
                     settings.upmix.lfeGain = Float(v)
                 }
+            case "output_device":
+                if value == "auto" {
+                    settings.outputName = nil
+                    settings.outputUid = nil
+                } else if value.isEmpty {
+                    warnings.append("line \(line): output_device requires a device name or auto")
+                } else {
+                    settings.outputName = value
+                }
+            case "output_device_uid":
+                if value.isEmpty {
+                    warnings.append("line \(line): output_device_uid requires a value")
+                } else {
+                    settings.outputUid = value
+                }
             case "eq_preamp_db":
                 if value == "auto" {
                     settings.eqPreampDb = nil
@@ -116,6 +142,14 @@ public struct DaemonSettings: Equatable {
     public func render() -> String {
         var lines = [
             "# upmixd configuration — edited live; the daemon reloads on save",
+            "",
+            "# output_device = auto picks the most capable real device",
+            "output_device = \(outputName ?? "auto")",
+        ]
+        if let outputUid {
+            lines.append("output_device_uid = \(outputUid)")
+        }
+        lines += [
             "",
             "# upmix (bounds are the no-clipping limits for full-scale input)",
             "rear_gain = \(upmix.rearGain)",
