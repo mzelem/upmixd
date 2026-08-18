@@ -81,17 +81,6 @@ public func findDevice(uid: String) throws -> AudioDeviceID {
     throw CoreAudioError.notFound("audio device with UID \"\(uid)\"")
 }
 
-/// Find a device by name that actually has output streams (devices like the
-/// CM6206 enumerate their output and input sides under the same name).
-public func findPlaybackDevice(name: String) throws -> AudioDeviceID {
-    for device in try allDeviceIDs() where deviceName(device) == name {
-        if let streams = try? outputStreams(device), !streams.isEmpty {
-            return device
-        }
-    }
-    throw CoreAudioError.notFound("playback device named \"\(name)\"")
-}
-
 public func outputStreams(_ device: AudioDeviceID) throws -> [AudioStreamID] {
     var addr = address(kAudioDevicePropertyStreams, scope: kAudioDevicePropertyScopeOutput)
     var size: UInt32 = 0
@@ -312,4 +301,16 @@ public func listOutputCandidates(captureUID: String) -> [OutputCandidate] {
                 || transport == kAudioDeviceTransportTypeAggregate))
     }
     return candidates
+}
+
+public func deviceNominalSampleRate(_ device: AudioDeviceID) -> Double? {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyNominalSampleRate,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var rate = 0.0
+    var size = UInt32(MemoryLayout<Double>.size)
+    guard AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &rate) == noErr, rate > 0
+    else { return nil }
+    return rate
 }

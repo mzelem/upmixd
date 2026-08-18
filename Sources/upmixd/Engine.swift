@@ -7,14 +7,14 @@ enum RenderHealth: Int32 {
     case unknown = 0
     case ok = 1
     case noStereoInput = 2
-    case noSixChannelOutput = 3
+    case noMatchingOutput = 3
 
     var description: String {
         switch self {
         case .unknown: return "IOProc has not run"
         case .ok: return "ok"
         case .noStereoInput: return "no 2ch input buffer in aggregate"
-        case .noSixChannelOutput: return "no 6ch output buffer in aggregate"
+        case .noMatchingOutput: return "no matching output buffer in aggregate"
         }
     }
 }
@@ -46,6 +46,13 @@ final class Engine {
 
     private let upmixer: Upmixer
     private let equalizer: Equalizer
+    /// 6 = upmix to 5.1; 2 = EQ-only stereo passthrough.
+    private let outputChannels: Int
+    /// How many output buffers at the head of the ABL belong to the capture
+    /// device's own loopback streams (aggregate buffers follow sub-device
+    /// order, capture first). Those are zeroed and skipped; matching a plain
+    /// 2ch target by channel count alone would otherwise find the loopback.
+    private let captureOutputStreams: Int
     private var aggregate: AudioDeviceID = 0
     private var ioProcID: AudioDeviceIOProcID?
     private var running = false
@@ -56,8 +63,13 @@ final class Engine {
 
     private let sampleRate: Double
 
-    init(settings: DaemonSettings, sampleRate: Double) {
+    init(
+        settings: DaemonSettings, sampleRate: Double,
+        outputChannels: Int, captureOutputStreams: Int
+    ) {
         self.sampleRate = sampleRate
+        self.outputChannels = outputChannels
+        self.captureOutputStreams = captureOutputStreams
         // Fallbacks below are unreachable while config validation and the
         // pipeline share DaemonSettings.nominalSampleRate; the logs are the
         // tripwire in case that invariant ever breaks.
@@ -174,17 +186,26 @@ final class Engine {
             healthStorage.pointee = RenderHealth.noStereoInput.rawValue
             return
         }
-        guard let outBuffer = outputs.first(where: { $0.mNumberChannels == 6 }),
+        // Skip the capture device's own loopback buffers at the head of the
+        // ABL, then match the playback buffer by channel count. In stereo
+        // mode both sides are 2ch, so the skip is what disambiguates.
+        var outBufferFound: AudioBuffer?
+        for (index, buffer) in outputs.enumerated()
+        where index >= captureOutputStreams && buffer.mNumberChannels == UInt32(outputChannels) {
+            outBufferFound = buffer
+            break
+        }
+        guard let outBuffer = outBufferFound,
               let outData = outBuffer.mData?.assumingMemoryBound(to: Float.self)
         else {
-            healthStorage.pointee = RenderHealth.noSixChannelOutput.rawValue
+            healthStorage.pointee = RenderHealth.noMatchingOutput.rawValue
             return
         }
         healthStorage.pointee = RenderHealth.ok.rawValue
 
         let frames = min(
             Int(inBuffer.mDataByteSize) / (2 * MemoryLayout<Float>.size),
-            Int(outBuffer.mDataByteSize) / (6 * MemoryLayout<Float>.size),
+            Int(outBuffer.mDataByteSize) / (outputChannels * MemoryLayout<Float>.size),
             Engine.maxFrames)
         guard frames > 0 else { return }
 
@@ -208,11 +229,19 @@ final class Engine {
         }
 
         equalizer.process(left: left, right: right, frames: frames)
-        upmixer.process(left: left, right: right, frames: frames, outputs: channelOutputs)
 
-        for i in 0..<frames {
-            for ch in 0..<6 {
-                outData[6 * i + ch] = channelOutputs[ch][i]
+        if outputChannels == 6 {
+            upmixer.process(left: left, right: right, frames: frames, outputs: channelOutputs)
+            for i in 0..<frames {
+                for ch in 0..<6 {
+                    outData[6 * i + ch] = channelOutputs[ch][i]
+                }
+            }
+        } else {
+            // EQ-only stereo passthrough.
+            for i in 0..<frames {
+                outData[2 * i] = left[i]
+                outData[2 * i + 1] = right[i]
             }
         }
     }
