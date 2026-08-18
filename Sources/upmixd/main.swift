@@ -400,21 +400,19 @@ final class Supervisor {
                 // built for the real rate below. Any 2ch LPCM format works
                 // (the IOProc's virtual format is Float32 regardless).
                 try? setNominalSampleRate(playback, sampleRate)
-                if !ensureStereoFormat(device: playback, preferredRate: sampleRate) {
-                    throw CoreAudioError.notFound("a 2-channel format on \(logSafe(chosen.name))")
-                }
             }
             var engineRate = sampleRate
             if channels == 2 {
-                // The rate nudge is asynchronous; wait briefly for it to
-                // settle so the EQ isn't built for a stale rate.
-                let rateDeadline = Date(timeIntervalSinceNow: 1)
-                var rate = deviceNominalSampleRate(playback) ?? sampleRate
-                while rate != sampleRate && Date() < rateDeadline {
-                    usleep(100_000)
-                    rate = deviceNominalSampleRate(playback) ?? sampleRate
+                // ensureStereoFormat verifies the device landed on a 2ch
+                // format and reports that format's rate — the rate the DSP
+                // must be built for (may differ from the preferred 48k on
+                // devices whose only stereo formats are hi-res).
+                guard let stereoRate = ensureStereoFormat(
+                    device: playback, preferredRate: sampleRate)
+                else {
+                    throw CoreAudioError.notFound("a 2-channel format on \(logSafe(chosen.name))")
                 }
-                engineRate = rate
+                engineRate = stereoRate
             }
 
             // The device's own volume is the last hop; own it while attached

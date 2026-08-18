@@ -378,26 +378,37 @@ public func setOutputVolume(_ device: AudioDeviceID, _ volume: Float) {
 
 /// Put the device into a 2-channel format for stereo passthrough: prefer the
 /// pipeline's 16/48 shape, else ANY 2ch LPCM (the IOProc's virtual format is
-/// Float32 regardless of physical bits, so bit depth doesn't matter here).
-/// Without this, a hi-res-only device parked on a >2ch format never exposes
-/// a 2ch buffer and the health loop churns forever.
-public func ensureStereoFormat(device: AudioDeviceID, preferredRate: Double) -> Bool {
-    if currentOutputChannels(device) == 2 { return true }
+/// Float32 regardless of physical bits). Returns the sample rate of the
+/// format the device ended up on — the rate the DSP must be built for — or
+/// nil if no 2ch format could be established (verified, with a settle wait,
+/// so a rejected or slow async format change cannot silently churn).
+public func ensureStereoFormat(device: AudioDeviceID, preferredRate: Double) -> Double? {
+    func settleToStereo(expectedRate: Double) -> Double? {
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while currentOutputChannels(device) != 2 {
+            guard Date() < deadline else { return nil }
+            usleep(100_000)
+        }
+        return expectedRate
+    }
+    if currentOutputChannels(device) == 2 {
+        return deviceNominalSampleRate(device) ?? preferredRate
+    }
     if hasPhysicalFormat(device: device, channels: 2, bits: 16, sampleRate: preferredRate) {
         try? ensurePhysicalFormat(device: device, channels: 2, bits: 16, sampleRate: preferredRate)
-        return currentOutputChannels(device) == 2
+        return settleToStereo(expectedRate: preferredRate)
     }
-    guard let stream = try? outputStreams(device).first else { return false }
+    guard let stream = try? outputStreams(device).first else { return nil }
     var addr = AudioObjectPropertyAddress(
         mSelector: kAudioStreamPropertyAvailablePhysicalFormats,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain)
     var size: UInt32 = 0
-    guard AudioObjectGetPropertyDataSize(stream, &addr, 0, nil, &size) == noErr else { return false }
+    guard AudioObjectGetPropertyDataSize(stream, &addr, 0, nil, &size) == noErr else { return nil }
     var formats = [AudioStreamRangedDescription](
         repeating: AudioStreamRangedDescription(),
         count: Int(size) / MemoryLayout<AudioStreamRangedDescription>.size)
-    guard AudioObjectGetPropertyData(stream, &addr, 0, nil, &size, &formats) == noErr else { return false }
+    guard AudioObjectGetPropertyData(stream, &addr, 0, nil, &size, &formats) == noErr else { return nil }
     guard var target = (
         formats.first {
             $0.mFormat.mFormatID == kAudioFormatLinearPCM
@@ -405,7 +416,7 @@ public func ensureStereoFormat(device: AudioDeviceID, preferredRate: Double) -> 
         } ?? formats.first {
             $0.mFormat.mFormatID == kAudioFormatLinearPCM && $0.mFormat.mChannelsPerFrame == 2
         }
-    )?.mFormat else { return false }
+    )?.mFormat else { return nil }
     var formatAddr = AudioObjectPropertyAddress(
         mSelector: kAudioStreamPropertyPhysicalFormat,
         mScope: kAudioObjectPropertyScopeGlobal,
@@ -413,5 +424,5 @@ public func ensureStereoFormat(device: AudioDeviceID, preferredRate: Double) -> 
     _ = AudioObjectSetPropertyData(
         stream, &formatAddr, 0, nil,
         UInt32(MemoryLayout<AudioStreamBasicDescription>.size), &target)
-    return true
+    return settleToStereo(expectedRate: target.mSampleRate)
 }
