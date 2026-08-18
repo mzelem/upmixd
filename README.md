@@ -151,3 +151,10 @@ If upmixd is useful to you, you can [buy me a coffee](https://buymeacoffee.com/m
 
 MIT. BlackHole is a separate project (GPL-3.0) installed from its own
 official distribution; upmixd does not link against or bundle it.
+
+## Contributing
+
+PRs welcome. Every change lands through a pull request (`main` is
+protected); please keep commits small and atomic, and expect review
+focused on real-time-audio safety — nothing that allocates, locks, or
+blocks may touch the render path.
