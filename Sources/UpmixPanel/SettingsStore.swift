@@ -1,13 +1,20 @@
 import Combine
 import Foundation
 import UpmixCore
+import UpmixDevices
 
 /// Owns the panel's view of ~/.config/upmixd.conf: loads it, exposes slider
 /// state, and writes changes back (debounced, atomically). The daemon watches
 /// the file; this store never talks to the daemon directly.
 @MainActor
 final class SettingsStore: ObservableObject {
+    /// Mirrors the daemon's default capture; the picker filters it out.
+    static let captureUID = "BlackHole2ch_UID"
+
     @Published var graphicEQ: GraphicEQ
+    /// nil name = automatic selection.
+    @Published var outputName: String?
+    @Published var outputUid: String?
     @Published var preampAuto: Bool
     /// Manual preamp in dB, used when preampAuto is off.
     @Published var preampDb: Float
@@ -33,6 +40,8 @@ final class SettingsStore: ObservableObject {
         let settings = DaemonSettings()
         baseSettings = settings
         graphicEQ = GraphicEQ(from: settings)
+        outputName = settings.outputName
+        outputUid = settings.outputUid
         preampAuto = settings.eqPreampDb == nil
         preampDb = settings.eqPreampDb ?? -6
         rearGain = settings.upmix.rearGain
@@ -73,6 +82,8 @@ final class SettingsStore: ObservableObject {
         let settings = DaemonSettings.parse(text).settings
         baseSettings = settings
         graphicEQ = GraphicEQ(from: settings)
+        outputName = settings.outputName
+        outputUid = settings.outputUid
         preampAuto = settings.eqPreampDb == nil
         // -6 dB (the fixed-headroom default) is where leaving auto lands.
         preampDb = settings.eqPreampDb ?? -6
@@ -98,6 +109,32 @@ final class SettingsStore: ObservableObject {
         writeDebounce?.cancel()
         writeDebounce = nil
         writeNow()
+    }
+
+    /// Real output devices for the picker (virtual devices and the capture
+    /// excluded — they are plumbing, not places sound comes out).
+    func outputChoices() -> [OutputCandidate] {
+        listOutputCandidates(captureUID: Self.captureUID)
+            .filter { !$0.isVirtual && $0.uid != Self.captureUID }
+            .sorted { $0.name < $1.name }
+    }
+
+    /// The device automatic mode (or the current explicit choice) resolves
+    /// to right now, and whether the pipeline runs 5.1 there.
+    var resolvedOutput: (candidate: OutputCandidate?, surround: Bool) {
+        let selection: OutputSelection = outputName == nil && outputUid == nil
+            ? .automatic : .explicit(uid: outputUid, name: outputName)
+        let chosen = chooseOutput(
+            candidates: listOutputCandidates(captureUID: Self.captureUID),
+            selection: selection, captureUID: Self.captureUID)
+        let surround = (chosen?.pipelineChannels ?? 2) == 6
+        return (chosen, surround)
+    }
+
+    func selectOutput(_ candidate: OutputCandidate?) {
+        outputName = candidate?.name
+        outputUid = candidate?.uid
+        scheduleWrite()
     }
 
     /// What the daemon will actually apply, for display: the manual value, or
@@ -127,6 +164,8 @@ final class SettingsStore: ObservableObject {
             graphicEQ = merged
         }
         var settings = baseSettings
+        settings.outputName = outputName
+        settings.outputUid = outputUid
         settings.eqPreampDb = preampAuto ? nil : preampDb
         settings.upmix.rearGain = rearGain
         settings.upmix.rearDelayMs = rearDelayMs

@@ -1,0 +1,77 @@
+import Foundation
+
+/// A playable output device as seen at selection time. Pure data so the
+/// selection policy is testable without CoreAudio.
+public struct OutputCandidate: Equatable {
+    public var uid: String
+    public var name: String
+    public var maxOutputChannels: Int
+    /// Whether the device actually offers the exact format the 5.1 pipeline
+    /// needs — capability (channel count) alone is not feasibility.
+    public var supportsSurroundPipeline: Bool
+    public var isCurrentDefault: Bool
+    public var isVirtual: Bool
+
+    /// What the pipeline would run on this device.
+    public var pipelineChannels: Int { supportsSurroundPipeline ? 6 : 2 }
+
+    public init(
+        uid: String, name: String, maxOutputChannels: Int,
+        supportsSurroundPipeline: Bool? = nil,
+        isCurrentDefault: Bool = false, isVirtual: Bool = false
+    ) {
+        self.uid = uid
+        self.name = name
+        self.maxOutputChannels = maxOutputChannels
+        self.supportsSurroundPipeline = supportsSurroundPipeline ?? (maxOutputChannels >= 6)
+        self.isCurrentDefault = isCurrentDefault
+        self.isVirtual = isVirtual
+    }
+}
+
+public enum OutputSelection: Equatable {
+    /// Pick the most capable real device automatically.
+    case automatic
+    /// A user-chosen device. UID matches first; the name rescues the
+    /// selection when a replug changed the UID (USB UIDs embed the port).
+    case explicit(uid: String?, name: String?)
+}
+
+/// The device the daemon should attach to, or nil if none qualifies (auto
+/// with no real devices, or an explicit device that is absent — explicit
+/// selections wait rather than silently switching).
+public func chooseOutput(
+    candidates: [OutputCandidate], selection: OutputSelection, captureUID: String
+) -> OutputCandidate? {
+    // The capture is never selectable (feedback loop). Virtual devices are
+    // excluded from automatic selection only — an explicit choice of a
+    // virtual device is legitimate chaining and the user's call.
+    let selectable = candidates.filter { $0.uid != captureUID }
+    let real = selectable.filter { !$0.isVirtual }
+    switch selection {
+    case .automatic:
+        // Rank by what the pipeline can actually DO on the device (a feasible
+        // 6ch beats an 8ch-capable sink lacking the pipeline's format, which
+        // ranks as the stereo device it would effectively be); the current
+        // default breaks ties (the user already chose it); UID sort makes the
+        // final tie-break deterministic across enumeration orders.
+        return real.max { a, b in
+            if a.pipelineChannels != b.pipelineChannels {
+                return a.pipelineChannels < b.pipelineChannels
+            }
+            if a.isCurrentDefault != b.isCurrentDefault {
+                return b.isCurrentDefault
+            }
+            return a.uid > b.uid
+        }
+    case let .explicit(uid, name):
+        if let uid, let byUid = selectable.first(where: { $0.uid == uid }) {
+            return byUid
+        }
+        if let name, let byName = selectable.first(where: { $0.name == name }) {
+            return byName
+        }
+        return nil
+    }
+}
+

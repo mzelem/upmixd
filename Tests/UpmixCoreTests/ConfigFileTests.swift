@@ -139,6 +139,87 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertEqual(result.warnings.count, 20 - DaemonSettings.maxEqBands)
     }
 
+    func testOutputDeviceDefaultsToAutomatic() {
+        XCTAssertEqual(DaemonSettings().outputSelection, .automatic)
+        XCTAssertEqual(DaemonSettings.parse("").settings.outputSelection, .automatic)
+    }
+
+    func testOutputDeviceParsesNameAndUid() {
+        let byName = DaemonSettings.parse("output_device = Nice DAC")
+        XCTAssertTrue(byName.warnings.isEmpty)
+        XCTAssertEqual(byName.settings.outputSelection, .explicit(uid: nil, name: "Nice DAC"))
+
+        let both = DaemonSettings.parse("""
+        output_device = USB Sound Device
+        output_device_uid = AppleUSBAudioEngine:X:1
+        """)
+        XCTAssertTrue(both.warnings.isEmpty)
+        XCTAssertEqual(
+            both.settings.outputSelection,
+            .explicit(uid: "AppleUSBAudioEngine:X:1", name: "USB Sound Device"))
+    }
+
+    func testOutputDeviceAutoKeywordResets() {
+        var settings = DaemonSettings()
+        settings.outputName = "Old"
+        settings.outputUid = "old-uid"
+        let parsed = DaemonSettings.parse("output_device = auto", defaults: settings)
+        XCTAssertEqual(parsed.settings.outputSelection, .automatic)
+        XCTAssertNil(parsed.settings.outputUid, "auto must clear a stale uid too")
+    }
+
+    func testOutputDeviceNameWithHashRoundTrips() {
+        // Device names come from USB descriptors and can contain '#'; the
+        // escaped form must survive the comment stripper.
+        var settings = DaemonSettings()
+        settings.outputName = "Speakers #2"
+        settings.outputUid = "AppleUSBAudioEngine:V:Speakers #2:20:1"
+        let result = DaemonSettings.parse(settings.render())
+        XCTAssertTrue(result.warnings.isEmpty, "unexpected: \(result.warnings)")
+        XCTAssertEqual(result.settings, settings)
+    }
+
+    func testRenderSanitizesControlCharactersInDeviceNames() {
+        // A hostile descriptor string must not be able to inject config lines.
+        var settings = DaemonSettings()
+        settings.outputName = "Evil\nrear_gain = 0.0\nSpeakers"
+        let parsed = DaemonSettings.parse(settings.render())
+        XCTAssertEqual(parsed.settings.upmix.rearGain, DaemonSettings().upmix.rearGain,
+                       "injected key must not take effect")
+        XCTAssertTrue(parsed.settings.outputName?.contains("\n") != true)
+    }
+
+    func testNameLineClearsStaleUid() {
+        // Hand-editing the name must win over a leftover uid line above it.
+        var stale = DaemonSettings()
+        stale.outputUid = "old-uid"
+        let parsed = DaemonSettings.parse("output_device = Device B", defaults: stale)
+        XCTAssertEqual(parsed.settings.outputSelection, .explicit(uid: nil, name: "Device B"))
+    }
+
+    func testUidOnlySelectionRendersWithoutAutoLine() {
+        var settings = DaemonSettings()
+        settings.outputUid = "some-uid"
+        let text = settings.render()
+        XCTAssertFalse(text.split(separator: "\n").contains("output_device = auto"),
+                       "uid-only selection must not claim to be automatic")
+        let parsed = DaemonSettings.parse(text)
+        XCTAssertEqual(parsed.settings, settings)
+    }
+
+    func testOutputDeviceRoundTrips() {
+        var settings = DaemonSettings()
+        settings.outputName = "USB Sound Device"
+        settings.outputUid = "AppleUSBAudioEngine:X:1"
+        var result = DaemonSettings.parse(settings.render())
+        XCTAssertTrue(result.warnings.isEmpty)
+        XCTAssertEqual(result.settings, settings)
+
+        result = DaemonSettings.parse(DaemonSettings().render())
+        XCTAssertTrue(result.warnings.isEmpty)
+        XCTAssertEqual(result.settings.outputSelection, .automatic)
+    }
+
     func testAutoPreampRoundTrips() {
         var settings = DaemonSettings()
         settings.eqPreampDb = nil // auto

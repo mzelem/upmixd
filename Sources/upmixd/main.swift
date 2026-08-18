@@ -1,11 +1,11 @@
 import CoreAudio
 import Foundation
 import UpmixCore
+import UpmixDevices
 
 setvbuf(stdout, nil, _IOLBF, 0) // line-buffer logs under launchd
 
 let defaultCaptureUID = "BlackHole2ch_UID"
-let defaultPlaybackName = "USB Sound Device"
 // Single source of truth shared with config validation, so bands the parser
 // accepts are always applicable to the running pipeline.
 let sampleRate = DaemonSettings.nominalSampleRate
@@ -22,8 +22,11 @@ func usage() -> Never {
 
         options:
           --capture-uid <uid>    capture device UID (default: \(defaultCaptureUID))
-          --playback-uid <uid>   playback device UID (default: find by name)
-          --playback-name <name> playback device name (default: \(defaultPlaybackName))
+          --playback-uid <uid>   select the output device by UID
+          --playback-name <name> select the output device by name
+                                 (default: automatic — the most capable real
+                                 device; the config file's output_device
+                                 setting overrides these flags)
           --set-default          manage the system default output: point it at
                                  the capture device while upmixing, restore it
                                  on shutdown/disconnect
@@ -58,8 +61,6 @@ func parseNumber(_ raw: String?, flag: String, min: Double, max: Double) -> Doub
 /// confined to the main queue.
 final class Supervisor {
     private let captureUID: String
-    private let playbackUID: String?
-    private let playbackName: String
     private let manageDefault: Bool
     private let configPath: String
     /// Settings derived from CLI flags; the config file is parsed on top of
@@ -75,6 +76,9 @@ final class Supervisor {
     private var capture: AudioDeviceID = 0
     private var playback: AudioDeviceID = 0
     private var activePlaybackUID: String?
+    private var activeChannels = 0
+    private var savedPlaybackVolume: Float?
+    private var savedVolumeOwnerUID: String?
     private var playbackAliveBlock: AudioObjectPropertyListenerBlock?
     private var engine: Engine?
     private var healthTimer: DispatchSourceTimer?
@@ -82,16 +86,16 @@ final class Supervisor {
     private var pendingDeadline: DispatchTime = .distantFuture
 
     init(
-        captureUID: String, playbackUID: String?, playbackName: String,
+        captureUID: String, playbackUID: String?, playbackName: String?,
         manageDefault: Bool, configTemplate: UpmixConfig, configPath: String
     ) {
         self.captureUID = captureUID
-        self.playbackUID = playbackUID
-        self.playbackName = playbackName
         self.manageDefault = manageDefault
         self.configPath = configPath
         var seed = DaemonSettings()
         seed.upmix = configTemplate
+        seed.outputName = playbackName
+        seed.outputUid = playbackUID
         seedSettings = seed
         currentSettings = seed
     }
@@ -124,10 +128,49 @@ final class Supervisor {
             ) { [weak self] _, _ in
                 // Small delay so the device finishes publishing its streams.
                 self?.scheduleActivation(after: 1.0)
+                self?.scheduleReevaluation()
             },
             "install device-list listener")
 
         activate()
+    }
+
+    /// Device arrivals can change what automatic selection would pick (dock
+    /// the surround adapter while running on the built-in speakers); if the
+    /// best choice differs from the active device, reattach to it.
+    private func scheduleReevaluation() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, self.engine != nil else { return }
+            let candidates = listOutputCandidates(captureUID: self.captureUID)
+            guard let best = chooseOutput(
+                candidates: candidates, selection: self.currentSettings.outputSelection,
+                captureUID: self.captureUID),
+                best.uid != self.activePlaybackUID,
+                // Switch only for a mode upgrade (stereo → surround): equal
+                // peers must not steal the device on tie-break churn.
+                best.pipelineChannels > self.activeChannels
+            else { return }
+            print("upmixd: switching output to \(logSafe(best.name))")
+            self.teardownEngine()
+            self.activate()
+            if self.engine == nil {
+                // The upgrade attempt failed; don't leave the default parked
+                // on a consumer-less BlackHole while the retry loop runs.
+                self.fallBackDefaultOutput()
+            }
+        }
+    }
+
+    /// Restore the commandeered device volume — only onto the device it was
+    /// saved from (CoreAudio can reuse AudioDeviceIDs after a replug).
+    private func restoreSavedVolume() {
+        if let saved = savedPlaybackVolume {
+            if isDeviceAlive(playback), deviceUID(playback) == savedVolumeOwnerUID {
+                setOutputVolume(playback, saved)
+            }
+            savedPlaybackVolume = nil
+            savedVolumeOwnerUID = nil
+        }
     }
 
     func shutdown(_ code: Int32) -> Never {
@@ -245,9 +288,34 @@ final class Supervisor {
         guard let loaded = loadConfigFromDisk() else { return }
         lastConfigMtime = mtime
         guard loaded != currentSettings else { return }
+        let selectionChanged = loaded.outputSelection != currentSettings.outputSelection
         currentSettings = loaded
         print("upmixd: config reloaded")
-        engine?.submit(loaded)
+        if selectionChanged, engine != nil {
+            // Skip the audible teardown gap when the new selection resolves
+            // to the device we're already attached to in the same mode
+            // (e.g. explicitly picking what automatic had chosen).
+            let resolved = chooseOutput(
+                candidates: listOutputCandidates(captureUID: captureUID),
+                selection: loaded.outputSelection, captureUID: captureUID)
+            if resolved?.uid == activePlaybackUID,
+               resolved?.pipelineChannels == activeChannels {
+                engine?.submit(loaded)
+                return
+            }
+            print("upmixd: output selection changed; reattaching")
+            teardownEngine()
+            activate()
+            if engine == nil {
+                fallBackDefaultOutput()
+            }
+        } else if selectionChanged {
+            // Waiting state: retry immediately with the new selection rather
+            // than making the user sit out the backstop interval.
+            scheduleActivation(after: 0.1)
+        } else {
+            engine?.submit(loaded)
+        }
     }
 
     private func aliveAddress() -> AudioObjectPropertyAddress {
@@ -286,33 +354,89 @@ final class Supervisor {
     private func activate() {
         guard engine == nil else { return }
         do {
-            playback = try playbackUID.map { try findDevice(uid: $0) }
-                ?? findPlaybackDevice(name: playbackName)
-            guard let resolvedPlaybackUID = deviceUID(playback) else {
-                throw CoreAudioError.notFound("UID for playback device")
-            }
-
-            try ensurePhysicalFormat(device: playback, channels: 6, bits: 16, sampleRate: sampleRate)
-            try setNominalSampleRate(capture, sampleRate)
-            try setNominalSampleRate(playback, sampleRate)
-
-            // The format switch is an asynchronous USB alt-setting change;
-            // give it a moment to settle before building the aggregate.
-            let formatDeadline = Date(timeIntervalSinceNow: 2)
-            while currentOutputChannels(playback) != 6 {
-                guard Date() < formatDeadline else {
-                    throw CoreAudioError.notFound("6ch format on playback device (did not settle)")
+            let candidates = listOutputCandidates(captureUID: captureUID)
+            guard let chosen = chooseOutput(
+                candidates: candidates, selection: currentSettings.outputSelection,
+                captureUID: captureUID)
+            else {
+                let wanted: String
+                switch currentSettings.outputSelection {
+                case .automatic: wanted = "any real output device (automatic)"
+                case let .explicit(uid, name):
+                    wanted = "device \(logSafe(name ?? uid ?? "?"))"
                 }
-                usleep(100_000)
+                throw CoreAudioError.notFound(wanted)
+            }
+            playback = try findDevice(uid: chosen.uid)
+            let resolvedPlaybackUID = chosen.uid
+            // Feasibility, not just capability: a device advertising 8ch but
+            // lacking an exact 6ch/16/48 format (some HDMI sinks) degrades to
+            // stereo EQ instead of wedging activation forever.
+            var channels = chosen.pipelineChannels
+            if channels == 6,
+               !hasPhysicalFormat(device: playback, channels: 6, bits: 16, sampleRate: sampleRate) {
+                print("upmixd: \(logSafe(chosen.name)) has no 6ch/16bit/48kHz format; using stereo EQ mode")
+                channels = 2
             }
 
-            let newEngine = Engine(settings: currentSettings, sampleRate: sampleRate)
+            try setNominalSampleRate(capture, sampleRate)
+            if channels == 6 {
+                try ensurePhysicalFormat(
+                    device: playback, channels: 6, bits: 16, sampleRate: sampleRate)
+                try setNominalSampleRate(playback, sampleRate)
+
+                // The format switch is an asynchronous USB alt-setting change;
+                // give it a moment to settle before building the aggregate.
+                let formatDeadline = Date(timeIntervalSinceNow: 2)
+                while currentOutputChannels(playback) != 6 {
+                    guard Date() < formatDeadline else {
+                        throw CoreAudioError.notFound("6ch format on playback device (did not settle)")
+                    }
+                    usleep(100_000)
+                }
+            } else {
+                // Stereo passthrough: nudge the device toward the pipeline
+                // rate but respect whatever it actually runs — the DSP is
+                // built for the real rate below. Any 2ch LPCM format works
+                // (the IOProc's virtual format is Float32 regardless).
+                try? setNominalSampleRate(playback, sampleRate)
+            }
+            var engineRate = sampleRate
+            if channels == 2 {
+                // ensureStereoFormat verifies the device landed on a 2ch
+                // format and reports that format's rate — the rate the DSP
+                // must be built for (may differ from the preferred 48k on
+                // devices whose only stereo formats are hi-res).
+                guard let stereoRate = ensureStereoFormat(
+                    device: playback, preferredRate: sampleRate)
+                else {
+                    throw CoreAudioError.notFound("a 2-channel format on \(logSafe(chosen.name))")
+                }
+                engineRate = stereoRate
+            }
+
+            // The device's own volume is the last hop; own it while attached
+            // (loudness control lives upstream in the volume keys/BlackHole)
+            // and restore it on detach. A stale 40% here made everything
+            // mysteriously quiet.
+            if let deviceVolume = outputVolume(playback), deviceVolume < 1.0 {
+                savedPlaybackVolume = deviceVolume
+                savedVolumeOwnerUID = resolvedPlaybackUID
+                setOutputVolume(playback, 1.0)
+            }
+
+            let captureStreams = (try? outputStreams(capture).count) ?? 1
+            let newEngine = Engine(
+                settings: currentSettings, sampleRate: engineRate,
+                outputChannels: channels, captureOutputStreams: captureStreams)
             try newEngine.start(captureUID: captureUID, playbackUID: resolvedPlaybackUID)
             engine = newEngine
             activePlaybackUID = resolvedPlaybackUID
+            activeChannels = channels
             clearPendingActivation()
             lastWaitMessage = nil
-            print("upmixd: \(logSafe(deviceName(capture) ?? captureUID)) → \(logSafe(deviceName(playback) ?? "?")) (5.1) @ \(Int(sampleRate))Hz")
+            let mode = channels == 6 ? "5.1" : "stereo EQ"
+            print("upmixd: \(logSafe(deviceName(capture) ?? captureUID)) → \(logSafe(chosen.name)) (\(mode)) @ \(Int(engineRate))Hz")
 
             if manageDefault {
                 try? setDefaultOutputDevice(capture)
@@ -322,6 +446,9 @@ final class Supervisor {
             installPlaybackAliveListener(on: playback)
             startHealthTimer(for: newEngine)
         } catch {
+            // A failed start must not strand the commandeered volume
+            // (teardownEngine never runs on this path).
+            restoreSavedVolume()
             // Log once per distinct failure, so a changed diagnosis (device
             // missing → format won't settle) still reaches the log.
             let message = "upmixd: waiting for devices (\(error))"
@@ -396,6 +523,7 @@ final class Supervisor {
         }
         engine?.stop()
         engine = nil
+        restoreSavedVolume()
     }
 
     /// Audio routed to BlackHole with no consumer is silence; put the default
@@ -414,7 +542,7 @@ final class Supervisor {
 
 var captureUID = defaultCaptureUID
 var playbackUID: String?
-var playbackName = defaultPlaybackName
+var playbackName: String?
 var setDefault = false
 var config = UpmixConfig()
 var configPath = FileManager.default.homeDirectoryForCurrentUser.path + "/.config/upmixd.conf"

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import UpmixCore
 
@@ -6,6 +7,15 @@ struct UpmixPanelApp: App {
     @StateObject private var store: SettingsStore
 
     init() {
+        // Single instance: the login agent may already be running when the
+        // user double-clicks the app — a second menu-bar icon writing the
+        // same config is pure confusion.
+        let mine = Bundle.main.bundleIdentifier
+        if let mine,
+           NSRunningApplication.runningApplications(withBundleIdentifier: mine)
+               .contains(where: { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }) {
+            exit(0)
+        }
         // Honor the same --config flag as the daemon so a relocated settings
         // file keeps both processes on one source of truth.
         var path = SettingsStore.defaultConfigPath
@@ -91,8 +101,36 @@ struct PanelView: View {
         .frame(width: width)
     }
 
+    private func outputPicker(resolved: (candidate: OutputCandidate?, surround: Bool)) -> some View {
+        let isAuto = store.outputName == nil && store.outputUid == nil
+        let title = isAuto
+            ? "Auto\(resolved.candidate.map { " (\($0.name))" } ?? "")"
+            : (store.outputName ?? store.outputUid ?? "?")
+        return HStack {
+            Text("Output").font(.headline)
+            Spacer()
+            Menu(title) {
+                Button("Automatic") { store.selectOutput(nil) }
+                Divider()
+                ForEach(store.outputChoices(), id: \.uid) { choice in
+                    // Label with what the pipeline will actually DO there,
+                    // not raw capability (an 8ch sink without our format
+                    // runs stereo and must say so).
+                    Button("\(choice.name) (\(choice.pipelineChannels == 6 ? "5.1" : "stereo"))") {
+                        store.selectOutput(choice)
+                    }
+                }
+            }
+            .controlSize(.small)
+            .fixedSize()
+        }
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let resolved = store.resolvedOutput // one enumeration per render
+        return VStack(alignment: .leading, spacing: 10) {
+            outputPicker(resolved: resolved)
+            Divider()
             HStack {
                 Text("Equalizer").font(.headline)
                 Spacer()
@@ -151,17 +189,24 @@ struct PanelView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Divider()
-            Text("Surround").font(.headline)
+            if resolved.surround {
+                Divider()
+                Text("Surround").font(.headline)
 
-            surroundSlider("Rear", value: floatBinding(\.rearGain), range: 0...1,
-                           display: String(format: "%.2f", store.rearGain))
-            surroundSlider("Delay", value: doubleBinding(\.rearDelayMs), range: 1...100,
-                           display: String(format: "%.0f ms", store.rearDelayMs))
-            surroundSlider("Center", value: floatBinding(\.centerGain), range: 0...0.5,
-                           display: String(format: "%.2f", store.centerGain))
-            surroundSlider("Sub", value: floatBinding(\.lfeGain), range: 0...0.45,
-                           display: String(format: "%.2f", store.lfeGain))
+                surroundSlider("Rear", value: floatBinding(\.rearGain), range: 0...1,
+                               display: String(format: "%.2f", store.rearGain))
+                surroundSlider("Delay", value: doubleBinding(\.rearDelayMs), range: 1...100,
+                               display: String(format: "%.0f ms", store.rearDelayMs))
+                surroundSlider("Center", value: floatBinding(\.centerGain), range: 0...0.5,
+                               display: String(format: "%.2f", store.centerGain))
+                surroundSlider("Sub", value: floatBinding(\.lfeGain), range: 0...0.45,
+                               display: String(format: "%.2f", store.lfeGain))
+            } else {
+                Text("Stereo output — EQ only; surround controls apply when a 5.1-capable device is selected.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Divider()
             HStack {

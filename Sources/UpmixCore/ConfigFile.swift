@@ -17,6 +17,17 @@ public struct DaemonSettings: Equatable {
     /// the way auto's re-measurement does.
     public var eqPreampDb: Float? = -6
 
+    /// Output device selection. Both nil = automatic (most capable real
+    /// device). The name is the primary key (USB UIDs change with the port);
+    /// the uid disambiguates same-name devices.
+    public var outputName: String?
+    public var outputUid: String?
+
+    public var outputSelection: OutputSelection {
+        if outputName == nil && outputUid == nil { return .automatic }
+        return .explicit(uid: outputUid, name: outputName)
+    }
+
     public init() {}
 
     /// Forgiving line-based parse: `#` comments, blank lines, `key = value`.
@@ -46,7 +57,15 @@ public struct DaemonSettings: Equatable {
             .replacingOccurrences(of: "\r", with: "\n")
         for (index, rawLine) in normalized.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let line = index + 1
-            let content = rawLine.prefix(while: { $0 != "#" })
+            // Comment stripper honoring backslash escapes: render() writes
+            // device names containing '#' as "\#" so they survive this cut.
+            var content = ""
+            var previous: Character? = nil
+            for character in rawLine {
+                if character == "#" && previous != "\\" { break }
+                content.append(character)
+                previous = character
+            }
             let trimmed = content.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
 
@@ -73,6 +92,26 @@ public struct DaemonSettings: Equatable {
             case "lfe_gain":
                 if let v = scalar(value, key, min: 0, max: 0.45, line: line) {
                     settings.upmix.lfeGain = Float(v)
+                }
+            case "output_device":
+                if value == "auto" {
+                    settings.outputName = nil
+                    settings.outputUid = nil
+                } else if value.isEmpty {
+                    warnings.append("line \(line): output_device requires a device name or auto")
+                } else {
+                    settings.outputName = value.replacingOccurrences(of: "\\#", with: "#")
+                    // A name line is authoritative: clear any earlier uid so a
+                    // hand-edited name isn't silently overridden by a stale
+                    // uid (the panel always writes the uid line after this
+                    // one, so panel-written pairs are unaffected).
+                    settings.outputUid = nil
+                }
+            case "output_device_uid":
+                if value.isEmpty {
+                    warnings.append("line \(line): output_device_uid requires a value")
+                } else {
+                    settings.outputUid = value.replacingOccurrences(of: "\\#", with: "#")
                 }
             case "eq_preamp_db":
                 if value == "auto" {
@@ -112,10 +151,32 @@ public struct DaemonSettings: Equatable {
         return (settings, warnings)
     }
 
-    /// Canonical config-file text; `parse(render())` round-trips exactly.
+    /// Canonical config-file text; `parse(render())` round-trips exactly for
+    /// values render can emit (device fields have control characters
+    /// stripped and '#' escaped on the way out).
     public func render() -> String {
+        // Device names/UIDs are descriptor-supplied text: strip control
+        // characters (nothing may inject config lines) and escape '#' so the
+        // comment stripper leaves them intact.
+        func configValue(_ raw: String) -> String {
+            let clean = String(String.UnicodeScalarView(
+                raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }))
+            return clean.replacingOccurrences(of: "#", with: "\\#")
+        }
         var lines = [
             "# upmixd configuration — edited live; the daemon reloads on save",
+            "",
+            "# output_device = auto picks the most capable real device",
+        ]
+        // A uid-only selection (e.g. --playback-uid with no name) must not
+        // emit the misleading "output_device = auto" line.
+        if outputName != nil || outputUid == nil {
+            lines.append("output_device = \(outputName.map(configValue) ?? "auto")")
+        }
+        if let outputUid {
+            lines.append("output_device_uid = \(configValue(outputUid))")
+        }
+        lines += [
             "",
             "# upmix (bounds are the no-clipping limits for full-scale input)",
             "rear_gain = \(upmix.rearGain)",

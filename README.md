@@ -1,7 +1,7 @@
 # upmixd
 
-System-wide stereo → 5.1 upmixing for macOS, with a live parametric EQ and a
-menu-bar control panel.
+System-wide audio processing for macOS: 5.1 upmixing on surround devices,
+EQ-only on stereo devices, with a live parametric EQ and a menu-bar panel.
 
 macOS never upmixes: stereo sources only reach the front pair of a surround
 speaker rig, even when the output device runs 6 channels. Linux's sound
@@ -9,7 +9,7 @@ server fills all speakers by default; Windows has driver-level "speaker
 fill"; macOS has nothing. `upmixd` is that missing layer:
 
 ```
-apps → BlackHole 2ch (system default output) → upmixd → your 5.1 device
+apps → BlackHole 2ch (system default output) → upmixd → your output device
 ```
 
 The daemon captures the system mix from [BlackHole](https://github.com/ExistentialAudio/BlackHole),
@@ -55,6 +55,17 @@ check System Settings → Privacy & Security → Microphone.
 The daemon points the system default output at BlackHole while it runs and
 puts it back on real speakers (the surround device, or the built-in/other
 speakers if it's unplugged) when it stops (`brew services stop upmixd`).
+
+## Output device
+
+By default upmixd picks your most capable real output device automatically —
+a 5.1-capable adapter gets the full upmix; a stereo device (built-in
+speakers, a DAC, headphones) gets an EQ-only passthrough at its native rate.
+Dock a surround adapter while running on stereo and upmixd switches to it
+within a second or two. Pick a specific device in the panel's Output menu or
+with `output_device = <name>` in the config; while attached, upmixd holds the
+device's own volume at 100% (and restores it on detach) so your volume keys
+are the only loudness control.
 
 ## Equalizer and tuning
 

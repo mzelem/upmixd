@@ -10,13 +10,14 @@ let package = Package(
     ],
     targets: [
         .target(name: "UpmixCore"),
+        .target(name: "UpmixDevices", dependencies: ["UpmixCore"]),
         .executableTarget(
             name: "upmixd",
-            dependencies: ["UpmixCore"]
+            dependencies: ["UpmixCore", "UpmixDevices"]
         ),
         .executableTarget(
             name: "UpmixPanel",
-            dependencies: ["UpmixCore"]
+            dependencies: ["UpmixCore", "UpmixDevices"]
         ),
         .testTarget(
             name: "UpmixCoreTests",
