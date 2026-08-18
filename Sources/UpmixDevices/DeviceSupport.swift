@@ -296,6 +296,9 @@ public func listOutputCandidates(captureUID: String) -> [OutputCandidate] {
             uid: uid,
             name: deviceName(device) ?? uid,
             maxOutputChannels: maxOutputChannels(device),
+            supportsSurroundPipeline: hasPhysicalFormat(
+                device: device, channels: 6, bits: 16,
+                sampleRate: DaemonSettings.nominalSampleRate),
             isCurrentDefault: device == currentDefault,
             isVirtual: transport == kAudioDeviceTransportTypeVirtual
                 || transport == kAudioDeviceTransportTypeAggregate))
@@ -341,10 +344,11 @@ public func hasPhysicalFormat(
 }
 
 /// Output volume as a 0-1 scalar: the main element if the device has one,
-/// else the average of the channel elements.
+/// else the average of the per-channel elements (surround devices commonly
+/// expose one per speaker — check enough elements to cover 7.1).
 public func outputVolume(_ device: AudioDeviceID) -> Float? {
     var values: [Float] = []
-    for element in [0, 1, 2] as [UInt32] {
+    for element in UInt32(0)...8 {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyVolumeScalar,
             mScope: kAudioDevicePropertyScopeOutput,
@@ -360,7 +364,7 @@ public func outputVolume(_ device: AudioDeviceID) -> Float? {
 }
 
 public func setOutputVolume(_ device: AudioDeviceID, _ volume: Float) {
-    for element in [0, 1, 2] as [UInt32] {
+    for element in UInt32(0)...8 {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyVolumeScalar,
             mScope: kAudioDevicePropertyScopeOutput,

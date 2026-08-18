@@ -22,6 +22,19 @@ final class OutputSelectionTests: XCTestCase {
         XCTAssertEqual(chosen?.uid, "usb")
     }
 
+    func testAutoPrefersFeasibleSurroundOverInfeasibleCapability() {
+        // An 8ch-capable HDMI sink without the pipeline's exact format is
+        // effectively a stereo device; a feasible 6ch adapter must win.
+        let chosen = chooseOutput(
+            candidates: [
+                candidate(uid: "hdmi8", name: "AVR", channels: 8)
+                    .with(surround: false),
+                candidate(uid: "usb", name: "USB Sound Device", channels: 6),
+            ],
+            selection: .automatic, captureUID: "cap")
+        XCTAssertEqual(chosen?.uid, "usb")
+    }
+
     func testAutoExcludesVirtualAndCapture() {
         let chosen = chooseOutput(
             candidates: [
@@ -106,9 +119,21 @@ final class OutputSelectionTests: XCTestCase {
     }
 
     func testPipelineChannelsForDevice() {
-        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 8), 6, "8ch devices run 5.1 for now")
-        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 6), 6)
-        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 4), 2, "no 4ch mode; EQ-only stereo")
-        XCTAssertEqual(pipelineChannels(deviceMaxChannels: 2), 2)
+        XCTAssertEqual(candidate(uid: "a", name: "a", channels: 8).pipelineChannels, 6)
+        XCTAssertEqual(candidate(uid: "a", name: "a", channels: 6).pipelineChannels, 6)
+        XCTAssertEqual(candidate(uid: "a", name: "a", channels: 4).pipelineChannels, 2,
+                       "no 4ch mode; EQ-only stereo")
+        XCTAssertEqual(candidate(uid: "a", name: "a", channels: 2).pipelineChannels, 2)
+        XCTAssertEqual(
+            candidate(uid: "a", name: "a", channels: 8).with(surround: false).pipelineChannels, 2,
+            "capability without pipeline-format feasibility is stereo")
+    }
+}
+
+private extension OutputCandidate {
+    func with(surround: Bool) -> OutputCandidate {
+        var copy = self
+        copy.supportsSurroundPipeline = surround
+        return copy
     }
 }

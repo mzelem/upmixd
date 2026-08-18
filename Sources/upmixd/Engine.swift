@@ -108,16 +108,19 @@ final class Engine {
         settingsLock.deallocate()
     }
 
+    private static var lastDropLog = 0
+
     /// Drop bands the pipeline's actual rate cannot host (a 20kHz band on a
     /// 44.1kHz device) so one bad band degrades to a partial EQ, not a dead
-    /// one. Main-thread only (it logs).
+    /// one. Main-thread only (it logs; log deduplicated across reloads).
     static func filteringBands(_ settings: DaemonSettings, forRate rate: Double) -> DaemonSettings {
         var filtered = settings
         filtered.eqBands = settings.eqBands.filter { $0.validated(sampleRate: rate) != nil }
         let dropped = settings.eqBands.count - filtered.eqBands.count
-        if dropped > 0 {
+        if dropped > 0, dropped != lastDropLog {
             print("upmixd: dropping \(dropped) EQ band(s) out of range at \(Int(rate))Hz")
         }
+        lastDropLog = dropped
         return filtered
     }
 

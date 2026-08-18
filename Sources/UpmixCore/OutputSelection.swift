@@ -6,16 +6,24 @@ public struct OutputCandidate: Equatable {
     public var uid: String
     public var name: String
     public var maxOutputChannels: Int
+    /// Whether the device actually offers the exact format the 5.1 pipeline
+    /// needs — capability (channel count) alone is not feasibility.
+    public var supportsSurroundPipeline: Bool
     public var isCurrentDefault: Bool
     public var isVirtual: Bool
 
+    /// What the pipeline would run on this device.
+    public var pipelineChannels: Int { supportsSurroundPipeline ? 6 : 2 }
+
     public init(
         uid: String, name: String, maxOutputChannels: Int,
+        supportsSurroundPipeline: Bool? = nil,
         isCurrentDefault: Bool = false, isVirtual: Bool = false
     ) {
         self.uid = uid
         self.name = name
         self.maxOutputChannels = maxOutputChannels
+        self.supportsSurroundPipeline = supportsSurroundPipeline ?? (maxOutputChannels >= 6)
         self.isCurrentDefault = isCurrentDefault
         self.isVirtual = isVirtual
     }
@@ -42,12 +50,14 @@ public func chooseOutput(
     let real = selectable.filter { !$0.isVirtual }
     switch selection {
     case .automatic:
-        // Most channels wins (a surround adapter beats stereo devices); the
-        // current default breaks ties (the user already chose it); UID sort
-        // makes the final tie-break deterministic across enumeration orders.
+        // Rank by what the pipeline can actually DO on the device (a feasible
+        // 6ch beats an 8ch-capable sink lacking the pipeline's format, which
+        // ranks as the stereo device it would effectively be); the current
+        // default breaks ties (the user already chose it); UID sort makes the
+        // final tie-break deterministic across enumeration orders.
         return real.max { a, b in
-            if a.maxOutputChannels != b.maxOutputChannels {
-                return a.maxOutputChannels < b.maxOutputChannels
+            if a.pipelineChannels != b.pipelineChannels {
+                return a.pipelineChannels < b.pipelineChannels
             }
             if a.isCurrentDefault != b.isCurrentDefault {
                 return b.isCurrentDefault
@@ -65,8 +75,3 @@ public func chooseOutput(
     }
 }
 
-/// How many channels the pipeline should run for a device: 5.1 when the
-/// device can take it, otherwise EQ-only stereo passthrough.
-public func pipelineChannels(deviceMaxChannels: Int) -> Int {
-    deviceMaxChannels >= 6 ? 6 : 2
-}

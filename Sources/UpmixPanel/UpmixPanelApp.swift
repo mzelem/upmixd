@@ -91,8 +91,7 @@ struct PanelView: View {
         .frame(width: width)
     }
 
-    private var outputPicker: some View {
-        let resolved = store.resolvedOutput
+    private func outputPicker(resolved: (candidate: OutputCandidate?, surround: Bool)) -> some View {
         let isAuto = store.outputName == nil && store.outputUid == nil
         let title = isAuto
             ? "Auto\(resolved.candidate.map { " (\($0.name))" } ?? "")"
@@ -115,8 +114,9 @@ struct PanelView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            outputPicker
+        let resolved = store.resolvedOutput // one enumeration per render
+        return VStack(alignment: .leading, spacing: 10) {
+            outputPicker(resolved: resolved)
             Divider()
             HStack {
                 Text("Equalizer").font(.headline)
@@ -176,7 +176,7 @@ struct PanelView: View {
                     .foregroundStyle(.secondary)
             }
 
-            if store.resolvedOutput.surround {
+            if resolved.surround {
                 Divider()
                 Text("Surround").font(.headline)
 

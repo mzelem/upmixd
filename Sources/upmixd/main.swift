@@ -147,7 +147,7 @@ final class Supervisor {
                 best.uid != self.activePlaybackUID,
                 // Switch only for a mode upgrade (stereo → surround): equal
                 // peers must not steal the device on tie-break churn.
-                pipelineChannels(deviceMaxChannels: best.maxOutputChannels) > self.activeChannels
+                best.pipelineChannels > self.activeChannels
             else { return }
             print("upmixd: switching output to \(logSafe(best.name))")
             self.teardownEngine()
@@ -340,7 +340,7 @@ final class Supervisor {
             // Feasibility, not just capability: a device advertising 8ch but
             // lacking an exact 6ch/16/48 format (some HDMI sinks) degrades to
             // stereo EQ instead of wedging activation forever.
-            var channels = pipelineChannels(deviceMaxChannels: chosen.maxOutputChannels)
+            var channels = chosen.pipelineChannels
             if channels == 6,
                !hasPhysicalFormat(device: playback, channels: 6, bits: 16, sampleRate: sampleRate) {
                 print("upmixd: \(logSafe(chosen.name)) has no 6ch/16bit/48kHz format; using stereo EQ mode")
@@ -407,6 +407,15 @@ final class Supervisor {
             installPlaybackAliveListener(on: playback)
             startHealthTimer(for: newEngine)
         } catch {
+            // A failed start must not strand the commandeered volume: restore
+            // it here (teardownEngine never runs on this path), or the saved
+            // value could later be applied to a different device.
+            if let saved = savedPlaybackVolume {
+                if isDeviceAlive(playback) {
+                    setOutputVolume(playback, saved)
+                }
+                savedPlaybackVolume = nil
+            }
             // Log once per distinct failure, so a changed diagnosis (device
             // missing → format won't settle) still reaches the log.
             let message = "upmixd: waiting for devices (\(error))"

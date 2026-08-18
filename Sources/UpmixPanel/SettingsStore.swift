@@ -127,7 +127,7 @@ final class SettingsStore: ObservableObject {
         let chosen = chooseOutput(
             candidates: listOutputCandidates(captureUID: Self.captureUID),
             selection: selection, captureUID: Self.captureUID)
-        let surround = (chosen.map { pipelineChannels(deviceMaxChannels: $0.maxOutputChannels) } ?? 2) == 6
+        let surround = (chosen?.pipelineChannels ?? 2) == 6
         return (chosen, surround)
     }
 

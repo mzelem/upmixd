@@ -146,7 +146,9 @@ public struct DaemonSettings: Equatable {
         return (settings, warnings)
     }
 
-    /// Canonical config-file text; `parse(render())` round-trips exactly.
+    /// Canonical config-file text; `parse(render())` round-trips exactly for
+    /// values render can emit (device fields have control characters
+    /// stripped and '#' escaped on the way out).
     public func render() -> String {
         // Device names/UIDs are descriptor-supplied text: strip control
         // characters (nothing may inject config lines) and escape '#' so the
