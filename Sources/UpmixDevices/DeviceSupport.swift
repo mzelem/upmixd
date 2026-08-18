@@ -314,3 +314,60 @@ public func deviceNominalSampleRate(_ device: AudioDeviceID) -> Double? {
     else { return nil }
     return rate
 }
+
+/// Whether the device's first output stream offers this exact physical
+/// format — checked before committing to a mode, so an infeasible choice
+/// degrades instead of wedging activation.
+public func hasPhysicalFormat(
+    device: AudioDeviceID, channels: UInt32, bits: UInt32, sampleRate: Double
+) -> Bool {
+    guard let stream = try? outputStreams(device).first else { return false }
+    var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioStreamPropertyAvailablePhysicalFormats,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(stream, &addr, 0, nil, &size) == noErr else { return false }
+    var formats = [AudioStreamRangedDescription](
+        repeating: AudioStreamRangedDescription(),
+        count: Int(size) / MemoryLayout<AudioStreamRangedDescription>.size)
+    guard AudioObjectGetPropertyData(stream, &addr, 0, nil, &size, &formats) == noErr else { return false }
+    return formats.contains {
+        $0.mFormat.mFormatID == kAudioFormatLinearPCM
+            && $0.mFormat.mChannelsPerFrame == channels
+            && $0.mFormat.mBitsPerChannel == bits
+            && $0.mFormat.mSampleRate == sampleRate
+    }
+}
+
+/// Output volume as a 0-1 scalar: the main element if the device has one,
+/// else the average of the channel elements.
+public func outputVolume(_ device: AudioDeviceID) -> Float? {
+    var values: [Float] = []
+    for element in [0, 1, 2] as [UInt32] {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: element)
+        var value: Float32 = 0
+        var size = UInt32(MemoryLayout<Float32>.size)
+        if AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &value) == noErr {
+            if element == 0 { return value }
+            values.append(value)
+        }
+    }
+    return values.isEmpty ? nil : values.reduce(0, +) / Float(values.count)
+}
+
+public func setOutputVolume(_ device: AudioDeviceID, _ volume: Float) {
+    for element in [0, 1, 2] as [UInt32] {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: element)
+        var value = Float32(max(0, min(1, volume)))
+        let status = AudioObjectSetPropertyData(
+            device, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &value)
+        if element == 0 && status == noErr { return } // main element covered all
+    }
+}

@@ -168,6 +168,27 @@ final class ConfigFileTests: XCTestCase {
         XCTAssertNil(parsed.settings.outputUid, "auto must clear a stale uid too")
     }
 
+    func testOutputDeviceNameWithHashRoundTrips() {
+        // Device names come from USB descriptors and can contain '#'; the
+        // escaped form must survive the comment stripper.
+        var settings = DaemonSettings()
+        settings.outputName = "Speakers #2"
+        settings.outputUid = "AppleUSBAudioEngine:V:Speakers #2:20:1"
+        let result = DaemonSettings.parse(settings.render())
+        XCTAssertTrue(result.warnings.isEmpty, "unexpected: \(result.warnings)")
+        XCTAssertEqual(result.settings, settings)
+    }
+
+    func testRenderSanitizesControlCharactersInDeviceNames() {
+        // A hostile descriptor string must not be able to inject config lines.
+        var settings = DaemonSettings()
+        settings.outputName = "Evil\nrear_gain = 0.0\nSpeakers"
+        let parsed = DaemonSettings.parse(settings.render())
+        XCTAssertEqual(parsed.settings.upmix.rearGain, DaemonSettings().upmix.rearGain,
+                       "injected key must not take effect")
+        XCTAssertTrue(parsed.settings.outputName?.contains("\n") != true)
+    }
+
     func testOutputDeviceRoundTrips() {
         var settings = DaemonSettings()
         settings.outputName = "USB Sound Device"

@@ -56,6 +56,22 @@ final class OutputSelectionTests: XCTestCase {
             "same set must choose the same device regardless of enumeration order")
     }
 
+    func testExplicitSelectionMayChooseVirtualDevices() {
+        // Chaining is legitimate: a user may deliberately route into another
+        // virtual device. Only the capture itself stays off-limits (feedback).
+        let virtualOut = candidate(uid: "bh16", name: "BlackHole 16ch", channels: 16, isVirtual: true)
+        XCTAssertEqual(
+            chooseOutput(
+                candidates: [virtualOut], selection: .explicit(uid: nil, name: "BlackHole 16ch"),
+                captureUID: "cap")?.uid,
+            "bh16")
+        XCTAssertNil(
+            chooseOutput(
+                candidates: [candidate(uid: "cap", name: "BlackHole 2ch", channels: 2)],
+                selection: .explicit(uid: "cap", name: "BlackHole 2ch"), captureUID: "cap"),
+            "explicitly selecting the capture would build a feedback loop")
+    }
+
     func testExplicitUidWinsOverName() {
         let chosen = chooseOutput(
             candidates: [

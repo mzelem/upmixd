@@ -77,6 +77,7 @@ final class Supervisor {
     private var playback: AudioDeviceID = 0
     private var activePlaybackUID: String?
     private var activeChannels = 0
+    private var savedPlaybackVolume: Float?
     private var playbackAliveBlock: AudioObjectPropertyListenerBlock?
     private var engine: Engine?
     private var healthTimer: DispatchSourceTimer?
@@ -143,7 +144,10 @@ final class Supervisor {
             guard let best = chooseOutput(
                 candidates: candidates, selection: self.currentSettings.outputSelection,
                 captureUID: self.captureUID),
-                best.uid != self.activePlaybackUID
+                best.uid != self.activePlaybackUID,
+                // Switch only for a mode upgrade (stereo → surround): equal
+                // peers must not steal the device on tie-break churn.
+                pipelineChannels(deviceMaxChannels: best.maxOutputChannels) > self.activeChannels
             else { return }
             print("upmixd: switching output to \(logSafe(best.name))")
             self.teardownEngine()
@@ -273,6 +277,10 @@ final class Supervisor {
             print("upmixd: output selection changed; reattaching")
             teardownEngine()
             activate()
+        } else if selectionChanged {
+            // Waiting state: retry immediately with the new selection rather
+            // than making the user sit out the backstop interval.
+            scheduleActivation(after: 0.1)
         } else {
             engine?.submit(loaded)
         }
@@ -319,12 +327,25 @@ final class Supervisor {
                 candidates: candidates, selection: currentSettings.outputSelection,
                 captureUID: captureUID)
             else {
-                throw CoreAudioError.notFound(
-                    "output device for selection \(currentSettings.outputName ?? "auto")")
+                let wanted: String
+                switch currentSettings.outputSelection {
+                case .automatic: wanted = "any real output device (automatic)"
+                case let .explicit(uid, name):
+                    wanted = "device \(logSafe(name ?? uid ?? "?"))"
+                }
+                throw CoreAudioError.notFound(wanted)
             }
             playback = try findDevice(uid: chosen.uid)
             let resolvedPlaybackUID = chosen.uid
-            let channels = pipelineChannels(deviceMaxChannels: chosen.maxOutputChannels)
+            // Feasibility, not just capability: a device advertising 8ch but
+            // lacking an exact 6ch/16/48 format (some HDMI sinks) degrades to
+            // stereo EQ instead of wedging activation forever.
+            var channels = pipelineChannels(deviceMaxChannels: chosen.maxOutputChannels)
+            if channels == 6,
+               !hasPhysicalFormat(device: playback, channels: 6, bits: 16, sampleRate: sampleRate) {
+                print("upmixd: \(logSafe(chosen.name)) has no 6ch/16bit/48kHz format; using stereo EQ mode")
+                channels = 2
+            }
 
             try setNominalSampleRate(capture, sampleRate)
             if channels == 6 {
@@ -346,10 +367,24 @@ final class Supervisor {
                 // rate but respect whatever it actually runs — the DSP is
                 // built for the real rate below.
                 try? setNominalSampleRate(playback, sampleRate)
+                if currentOutputChannels(playback) != 2,
+                   hasPhysicalFormat(device: playback, channels: 2, bits: 16, sampleRate: sampleRate) {
+                    try? ensurePhysicalFormat(
+                        device: playback, channels: 2, bits: 16, sampleRate: sampleRate)
+                }
             }
             let engineRate = channels == 6
                 ? sampleRate
                 : (deviceNominalSampleRate(playback) ?? sampleRate)
+
+            // The device's own volume is the last hop; own it while attached
+            // (loudness control lives upstream in the volume keys/BlackHole)
+            // and restore it on detach. A stale 40% here made everything
+            // mysteriously quiet.
+            if let deviceVolume = outputVolume(playback), deviceVolume < 1.0 {
+                savedPlaybackVolume = deviceVolume
+                setOutputVolume(playback, 1.0)
+            }
 
             let captureStreams = (try? outputStreams(capture).count) ?? 1
             let newEngine = Engine(
@@ -446,6 +481,14 @@ final class Supervisor {
         }
         engine?.stop()
         engine = nil
+        // Give the device its volume back so direct listening isn't suddenly
+        // at 100% (skip if it vanished — nothing to restore to).
+        if let saved = savedPlaybackVolume {
+            if isDeviceAlive(playback) {
+                setOutputVolume(playback, saved)
+            }
+            savedPlaybackVolume = nil
+        }
     }
 
     /// Audio routed to BlackHole with no consumer is silence; put the default

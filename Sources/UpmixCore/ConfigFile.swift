@@ -57,7 +57,15 @@ public struct DaemonSettings: Equatable {
             .replacingOccurrences(of: "\r", with: "\n")
         for (index, rawLine) in normalized.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
             let line = index + 1
-            let content = rawLine.prefix(while: { $0 != "#" })
+            // Comment stripper honoring backslash escapes: render() writes
+            // device names containing '#' as "\#" so they survive this cut.
+            var content = ""
+            var previous: Character? = nil
+            for character in rawLine {
+                if character == "#" && previous != "\\" { break }
+                content.append(character)
+                previous = character
+            }
             let trimmed = content.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
 
@@ -92,13 +100,13 @@ public struct DaemonSettings: Equatable {
                 } else if value.isEmpty {
                     warnings.append("line \(line): output_device requires a device name or auto")
                 } else {
-                    settings.outputName = value
+                    settings.outputName = value.replacingOccurrences(of: "\\#", with: "#")
                 }
             case "output_device_uid":
                 if value.isEmpty {
                     warnings.append("line \(line): output_device_uid requires a value")
                 } else {
-                    settings.outputUid = value
+                    settings.outputUid = value.replacingOccurrences(of: "\\#", with: "#")
                 }
             case "eq_preamp_db":
                 if value == "auto" {
@@ -140,14 +148,22 @@ public struct DaemonSettings: Equatable {
 
     /// Canonical config-file text; `parse(render())` round-trips exactly.
     public func render() -> String {
+        // Device names/UIDs are descriptor-supplied text: strip control
+        // characters (nothing may inject config lines) and escape '#' so the
+        // comment stripper leaves them intact.
+        func configValue(_ raw: String) -> String {
+            let clean = String(String.UnicodeScalarView(
+                raw.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }))
+            return clean.replacingOccurrences(of: "#", with: "\\#")
+        }
         var lines = [
             "# upmixd configuration — edited live; the daemon reloads on save",
             "",
             "# output_device = auto picks the most capable real device",
-            "output_device = \(outputName ?? "auto")",
+            "output_device = \(outputName.map(configValue) ?? "auto")",
         ]
         if let outputUid {
-            lines.append("output_device_uid = \(outputUid)")
+            lines.append("output_device_uid = \(configValue(outputUid))")
         }
         lines += [
             "",

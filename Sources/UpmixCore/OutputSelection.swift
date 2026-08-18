@@ -35,7 +35,11 @@ public enum OutputSelection: Equatable {
 public func chooseOutput(
     candidates: [OutputCandidate], selection: OutputSelection, captureUID: String
 ) -> OutputCandidate? {
-    let real = candidates.filter { !$0.isVirtual && $0.uid != captureUID }
+    // The capture is never selectable (feedback loop). Virtual devices are
+    // excluded from automatic selection only — an explicit choice of a
+    // virtual device is legitimate chaining and the user's call.
+    let selectable = candidates.filter { $0.uid != captureUID }
+    let real = selectable.filter { !$0.isVirtual }
     switch selection {
     case .automatic:
         // Most channels wins (a surround adapter beats stereo devices); the
@@ -51,10 +55,10 @@ public func chooseOutput(
             return a.uid > b.uid
         }
     case let .explicit(uid, name):
-        if let uid, let byUid = real.first(where: { $0.uid == uid }) {
+        if let uid, let byUid = selectable.first(where: { $0.uid == uid }) {
             return byUid
         }
-        if let name, let byName = real.first(where: { $0.name == name }) {
+        if let name, let byName = selectable.first(where: { $0.name == name }) {
             return byName
         }
         return nil

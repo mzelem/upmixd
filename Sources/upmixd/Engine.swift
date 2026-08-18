@@ -70,9 +70,10 @@ final class Engine {
         self.sampleRate = sampleRate
         self.outputChannels = outputChannels
         self.captureOutputStreams = captureOutputStreams
-        // Fallbacks below are unreachable while config validation and the
-        // pipeline share DaemonSettings.nominalSampleRate; the logs are the
-        // tripwire in case that invariant ever breaks.
+        // Stereo mode runs at the device's real rate, which can be lower
+        // than the 48kHz the parser validated bands against — filter the
+        // out-of-range bands (with a log) instead of losing the whole EQ.
+        let settings = Engine.filteringBands(settings, forRate: sampleRate)
         var upmixConfig = settings.upmix
         upmixConfig.sampleRate = sampleRate
         if let valid = upmixConfig.validated() {
@@ -107,6 +108,19 @@ final class Engine {
         settingsLock.deallocate()
     }
 
+    /// Drop bands the pipeline's actual rate cannot host (a 20kHz band on a
+    /// 44.1kHz device) so one bad band degrades to a partial EQ, not a dead
+    /// one. Main-thread only (it logs).
+    static func filteringBands(_ settings: DaemonSettings, forRate rate: Double) -> DaemonSettings {
+        var filtered = settings
+        filtered.eqBands = settings.eqBands.filter { $0.validated(sampleRate: rate) != nil }
+        let dropped = settings.eqBands.count - filtered.eqBands.count
+        if dropped > 0 {
+            print("upmixd: dropping \(dropped) EQ band(s) out of range at \(Int(rate))Hz")
+        }
+        return filtered
+    }
+
     /// Hand new settings to the render thread; applied at the start of the
     /// next IO cycle. Safe to call any time from the main thread.
     ///
@@ -114,9 +128,9 @@ final class Engine {
     /// measurement allocates, so the render thread must only ever see an
     /// explicit preamp (whose apply path is allocation-free).
     func submit(_ settings: DaemonSettings) {
-        var resolved = settings
-        let preamp = settings.eqPreampDb
-            ?? -Equalizer.cascadeMaxBoostDb(bands: settings.eqBands, sampleRate: sampleRate)
+        var resolved = Engine.filteringBands(settings, forRate: sampleRate)
+        let preamp = resolved.eqPreampDb
+            ?? -Equalizer.cascadeMaxBoostDb(bands: resolved.eqBands, sampleRate: sampleRate)
         resolved.eqPreampDb = max(-60, min(0, preamp))
         os_unfair_lock_lock(settingsLock)
         pendingSettings = resolved
