@@ -23,5 +23,9 @@ let package = Package(
             name: "UpmixCoreTests",
             dependencies: ["UpmixCore"]
         ),
+        .testTarget(
+            name: "UpmixPanelTests",
+            dependencies: ["UpmixPanel", "UpmixCore", "UpmixDevices"]
+        ),
     ]
 )

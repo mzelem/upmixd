@@ -112,7 +112,7 @@ struct PanelView: View {
             Menu(title) {
                 Button("Automatic") { store.selectOutput(nil) }
                 Divider()
-                ForEach(store.outputChoices(), id: \.uid) { choice in
+                ForEach(store.outputCandidates, id: \.uid) { choice in
                     // Label with what the pipeline will actually DO there,
                     // not raw capability (an 8ch sink without our format
                     // runs stereo and must say so).
@@ -127,7 +127,7 @@ struct PanelView: View {
     }
 
     var body: some View {
-        let resolved = store.resolvedOutput // one enumeration per render
+        let resolved = store.resolvedOutput // cached; refreshed on device changes
         return VStack(alignment: .leading, spacing: 10) {
             outputPicker(resolved: resolved)
             Divider()
@@ -226,7 +226,10 @@ struct PanelView: View {
         }
         .padding(12)
         .frame(width: 340)
-        .onAppear { store.reloadIfExternallyChanged() }
+        .onAppear {
+            store.reloadIfExternallyChanged()
+            store.refreshDevices() // catch changes the listeners missed while closed
+        }
     }
 
     private func floatBinding(_ keyPath: ReferenceWritableKeyPath<SettingsStore, Float>) -> Binding<Double> {
